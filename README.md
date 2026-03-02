@@ -48,7 +48,7 @@ are not testable against a mock.
 
 ## Roadmap
 
-- [ ] 01 — Scaffold & tooling
+- [x] 01 — Scaffold & tooling
 - [ ] 02 — Config & bootstrap
 - [ ] 03 — Postgres, Prisma & the core models
 - [ ] 04 — Relations, constraints & seed
