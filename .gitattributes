@@ -1,0 +1,16 @@
+# Normalise every text file to LF, in the repository and in the working tree.
+# This project is developed on Windows and built in Linux containers; a stray
+# CRLF makes `npm run format:check` fail on a whole file at once.
+* text=auto eol=lf
+
+# Byte-for-byte, never normalised.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.pdf  binary
+
+# Generated: collapse in diffs and exclude from language statistics.
+package-lock.json  linguist-generated=true
+src/generated/**   linguist-generated=true
