@@ -49,7 +49,7 @@ are not testable against a mock.
 ## Roadmap
 
 - [x] 01 — Scaffold & tooling
-- [ ] 02 — Config & bootstrap
+- [x] 02 — Config & bootstrap
 - [ ] 03 — Postgres, Prisma & the core models
 - [ ] 04 — Relations, constraints & seed
 - [ ] 05 — DB test harness (Testcontainers)
