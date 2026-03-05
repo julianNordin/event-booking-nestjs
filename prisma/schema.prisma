@@ -15,3 +15,59 @@ datasource db {
   // the schema so the same schema can be pointed at different databases
   // without editing a checked-in file.
 }
+
+enum EventStatus {
+  DRAFT
+  PUBLISHED
+  CANCELLED
+}
+
+model Event {
+  // uuid(7), not uuid(4). Version 7 is time-ordered, so inserts append to the
+  // right-hand edge of the primary key index instead of scattering writes
+  // across every page of it.
+  id String @id @default(uuid(7)) @db.Uuid
+
+  title       String  @db.VarChar(200)
+  description String? @db.VarChar(2000)
+  venue       String  @db.VarChar(200)
+
+  // Timestamptz on every single one. Prisma maps DateTime to timestamp(3)
+  // *without* a time zone by default, which for an API whose entire domain is
+  // "when does this start" silently discards the offset.
+  startsAt DateTime @map("starts_at") @db.Timestamptz(3)
+  endsAt   DateTime @map("ends_at") @db.Timestamptz(3)
+
+  capacity        Int
+  waitlistEnabled Boolean @default(true) @map("waitlist_enabled")
+
+  registrationOpensAt  DateTime? @map("registration_opens_at") @db.Timestamptz(3)
+  registrationClosesAt DateTime? @map("registration_closes_at") @db.Timestamptz(3)
+
+  status EventStatus @default(DRAFT)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  // The listing endpoint's default query is "published events, soonest first".
+  @@index([status, startsAt])
+  @@map("events")
+}
+
+model Attendee {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  // 320 = RFC 5321's 64-character local part, @, and a 255-character domain.
+  email String @db.VarChar(320)
+  name  String @db.VarChar(200)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  // No @unique on email. Uniqueness is case-insensitive and enforced by a
+  // functional index on lower(email), which Prisma's schema language cannot
+  // express — it is written by hand into the migration. A plain @unique here
+  // would be strictly weaker and would let Ada@example.com and ada@example.com
+  // both register as separate people.
+  @@map("attendees")
+}
