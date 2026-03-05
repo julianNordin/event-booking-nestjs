@@ -6,6 +6,7 @@ generator client {
   // prisma-client generator is ESM-first, and the default output cannot be
   // imported from the compiled application at all.
   moduleFormat = "cjs"
+  importFileExtension = ""
   runtime      = "nodejs"
 }
 
