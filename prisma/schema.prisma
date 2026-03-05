@@ -1,0 +1,17 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+
+  // NestJS builds to CommonJS and `nest build` emits require() calls. The
+  // prisma-client generator is ESM-first, and the default output cannot be
+  // imported from the compiled application at all.
+  moduleFormat = "cjs"
+  runtime      = "nodejs"
+}
+
+datasource db {
+  provider = "postgresql"
+  // The connection string lives in prisma.config.ts. Prisma 7 moved it out of
+  // the schema so the same schema can be pointed at different databases
+  // without editing a checked-in file.
+}
