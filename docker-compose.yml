@@ -1,0 +1,31 @@
+services:
+  db:
+    image: postgres:18-alpine
+    container_name: event-booking-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: events
+      POSTGRES_PASSWORD: events
+      POSTGRES_DB: events
+    ports:
+      - '5432:5432'
+    volumes:
+      # postgres:18 sets PGDATA to /var/lib/postgresql/18/docker and declares its
+      # volume at /var/lib/postgresql. Mounting /var/lib/postgresql/data — the
+      # convention every pre-18 example still shows — leaves the real data
+      # directory in the container's writable layer, where `docker compose down`
+      # destroys it while the named volume sits empty and looks fine.
+      - event-booking-db-data:/var/lib/postgresql
+    healthcheck:
+      # `migrate deploy` and the test harness both wait on this. pg_isready
+      # against the actual database, not just the port, because postgres accepts
+      # connections briefly during init and then restarts.
+      test: ['CMD-SHELL', 'pg_isready -U events -d events']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  event-booking-db-data:
+    name: event-booking-db-data
