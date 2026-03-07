@@ -17,6 +17,12 @@ datasource db {
   // without editing a checked-in file.
 }
 
+enum RegistrationStatus {
+  CONFIRMED
+  WAITLISTED
+  CANCELLED
+}
+
 enum EventStatus {
   DRAFT
   PUBLISHED
@@ -47,6 +53,8 @@ model Event {
 
   status EventStatus @default(DRAFT)
 
+  registrations Registration[]
+
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
@@ -62,6 +70,8 @@ model Attendee {
   email String @db.VarChar(320)
   name  String @db.VarChar(200)
 
+  registrations Registration[]
+
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
@@ -71,4 +81,34 @@ model Attendee {
   // would be strictly weaker and would let Ada@example.com and ada@example.com
   // both register as separate people.
   @@map("attendees")
+}
+
+model Registration {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  eventId    String @map("event_id") @db.Uuid
+  attendeeId String @map("attendee_id") @db.Uuid
+
+  status RegistrationStatus @default(CONFIRMED)
+
+  // Null unless status is WAITLISTED. Position 1 is next in line.
+  waitlistPosition Int? @map("waitlist_position")
+
+  registeredAt DateTime  @default(now()) @map("registered_at") @db.Timestamptz(3)
+  cancelledAt  DateTime? @map("cancelled_at") @db.Timestamptz(3)
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  // Deleting an event takes its registrations with it: they have no meaning
+  // without one, and leaving them would strand rows pointing at nothing.
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  // Deleting an attendee who holds registrations *fails*. The API can then
+  // answer 409 and name the reason, instead of silently gutting the roster of
+  // every event that person had signed up for.
+  attendee Attendee @relation(fields: [attendeeId], references: [id], onDelete: Restrict)
+
+  // The hot path: counting confirmed registrations for one event.
+  @@index([eventId, status])
+  @@index([attendeeId])
+  @@map("registrations")
 }
