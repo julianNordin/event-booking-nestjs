@@ -1,0 +1,21 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // Used *only* by ts-jest, never by `nest build` or `npm run typecheck`.
+    //
+    // Prisma's generated client loads its WASM query compiler with three
+    // `await import(...)` calls. Under `module: nodenext` TypeScript preserves
+    // those as real dynamic imports, which is correct — Node executes them
+    // happily from CommonJS. Jest's CommonJS VM cannot, and fails every query
+    // with "A dynamic import callback was invoked without
+    // --experimental-vm-modules", pointing at whichever query ran first rather
+    // than at the client.
+    //
+    // `module: commonjs` makes TypeScript downlevel `import()` into
+    // `Promise.resolve().then(() => require(...))`, which Jest resolves
+    // normally. Scoping it to the test transform keeps the shipped build on
+    // nodenext, where the native dynamic import is the better code.
+    "module": "commonjs",
+    "moduleResolution": "node10"
+  }
+}
