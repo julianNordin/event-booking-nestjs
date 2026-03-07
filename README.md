@@ -51,7 +51,7 @@ are not testable against a mock.
 - [x] 01 — Scaffold & tooling
 - [x] 02 — Config & bootstrap
 - [x] 03 — Postgres, Prisma & the core models
-- [ ] 04 — Relations, constraints & seed
+- [x] 04 — Relations, constraints & seed
 - [ ] 05 — DB test harness (Testcontainers)
 - [ ] 06 — Events: read endpoints
 - [ ] 07 — Events: writes & the status state machine
