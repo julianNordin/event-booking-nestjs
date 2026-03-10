@@ -53,7 +53,7 @@ are not testable against a mock.
 - [x] 03 — Postgres, Prisma & the core models
 - [x] 04 — Relations, constraints & seed
 - [x] 05 — DB test harness (Testcontainers)
-- [ ] 06 — Events: read endpoints
+- [x] 06 — Events: read endpoints
 - [ ] 07 — Events: writes & the status state machine
 - [ ] 08 — Problem Details & Prisma error mapping
 - [ ] 09 — Paging, sorting, filtering, search
