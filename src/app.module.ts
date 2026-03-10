@@ -4,6 +4,7 @@ import { ConfigModule } from '@nestjs/config';
 import { appConfig } from './config/app.config';
 import { databaseConfig } from './config/database.config';
 import { validateEnv } from './config/env.validation';
+import { EventsModule } from './events/events.module';
 import { PrismaModule } from './prisma/prisma.module';
 
 @Module({
@@ -19,6 +20,7 @@ import { PrismaModule } from './prisma/prisma.module';
       validate: validateEnv,
     }),
     PrismaModule,
+    EventsModule,
   ],
   controllers: [],
   providers: [],
