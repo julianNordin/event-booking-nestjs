@@ -6,6 +6,7 @@ import {
   HttpStatus,
   Param,
   ParseUUIDPipe,
+  Patch,
   Post,
   Res,
 } from '@nestjs/common';
@@ -15,6 +16,7 @@ import type { Response } from 'express';
 
 import { GLOBAL_PREFIX } from '../config/app.config';
 import { CreateEventDto } from './dto/create-event.dto';
+import { UpdateEventDto } from './dto/update-event.dto';
 
 import { EventResponseDto } from './dto/event-response.dto';
 import { EventsService } from './events.service';
@@ -59,5 +61,13 @@ export class EventsController {
     @Param('id', new ParseUUIDPipe({ version: '7' })) id: string,
   ): Promise<EventResponseDto> {
     return this.events.findOne(id);
+  }
+
+  @Patch(':id')
+  update(
+    @Param('id', new ParseUUIDPipe({ version: '7' })) id: string,
+    @Body() dto: UpdateEventDto,
+  ): Promise<EventResponseDto> {
+    return this.events.update(id, dto);
   }
 }

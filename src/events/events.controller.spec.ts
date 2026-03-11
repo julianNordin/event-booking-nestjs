@@ -40,13 +40,14 @@ describe('EventsController', () => {
   const findAll = jest.fn();
   const findOne = jest.fn();
   const create = jest.fn();
+  const update = jest.fn();
   let app: INestApplication;
   let server: Server;
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
       controllers: [EventsController],
-      providers: [{ provide: EventsService, useValue: { findAll, findOne, create } }],
+      providers: [{ provide: EventsService, useValue: { findAll, findOne, create, update } }],
     }).compile();
 
     app = configureApp(moduleRef.createNestApplication());
@@ -62,6 +63,7 @@ describe('EventsController', () => {
     findAll.mockReset();
     findOne.mockReset();
     create.mockReset();
+    update.mockReset();
   });
 
   describe('GET /events', () => {
@@ -203,6 +205,52 @@ describe('EventsController', () => {
         .expect(400);
 
       expect(create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('PATCH /events/:id', () => {
+    it('passes the id and the partial body to the service', async () => {
+      update.mockResolvedValue(dto);
+
+      await request(server)
+        .patch(`/${GLOBAL_PREFIX}/events/${V7_ID}`)
+        .send({ title: 'Renamed' })
+        .expect(200);
+
+      expect(update).toHaveBeenCalledWith(V7_ID, { title: 'Renamed' });
+    });
+
+    it('accepts an empty body as a no-op rather than rejecting it', async () => {
+      update.mockResolvedValue(dto);
+
+      await request(server).patch(`/${GLOBAL_PREFIX}/events/${V7_ID}`).send({}).expect(200);
+    });
+
+    it('rejects a status change, which must go through publish or cancel', async () => {
+      await request(server)
+        .patch(`/${GLOBAL_PREFIX}/events/${V7_ID}`)
+        .send({ status: 'PUBLISHED' })
+        .expect(400);
+
+      expect(update).not.toHaveBeenCalled();
+    });
+
+    it('still validates the fields that are present', async () => {
+      await request(server)
+        .patch(`/${GLOBAL_PREFIX}/events/${V7_ID}`)
+        .send({ capacity: 0 })
+        .expect(400);
+
+      expect(update).not.toHaveBeenCalled();
+    });
+
+    it('rejects a malformed id before the service is reached', async () => {
+      await request(server)
+        .patch(`/${GLOBAL_PREFIX}/events/not-a-uuid`)
+        .send({ title: 'x' })
+        .expect(400);
+
+      expect(update).not.toHaveBeenCalled();
     });
   });
 });

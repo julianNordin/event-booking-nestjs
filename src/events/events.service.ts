@@ -1,8 +1,14 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateEventDto } from './dto/create-event.dto';
 import { EventResponseDto } from './dto/event-response.dto';
+import { UpdateEventDto } from './dto/update-event.dto';
 import { toEventResponse } from './event.mapper';
 import { EventSchedule, validateSchedule } from './event-schedule';
 
@@ -55,6 +61,86 @@ export class EventsService {
     });
 
     return toEventResponse(event);
+  }
+
+  async update(id: string, dto: UpdateEventDto): Promise<EventResponseDto> {
+    const existing = await this.prisma.event.findUnique({ where: { id } });
+
+    if (existing === null) {
+      throw new NotFoundException(`No event with id ${id}`);
+    }
+
+    if (existing.status === 'CANCELLED') {
+      // Terminal in the state machine, and terminal here too. A cancelled
+      // event is the record of something that was called off; editing it
+      // rewrites what attendees were told.
+      throw new ConflictException('a cancelled event cannot be edited');
+    }
+
+    // The schedule rules apply to the event as it will be, not to the fields
+    // that happen to be in this request. Patching only endsAt has to be checked
+    // against the stored startsAt, or an event can be walked into an invalid
+    // state one field at a time.
+    this.assertScheduleIsCoherent({
+      startsAt: dto.startsAt ?? existing.startsAt,
+      endsAt: dto.endsAt ?? existing.endsAt,
+      registrationOpensAt:
+        dto.registrationOpensAt === undefined
+          ? existing.registrationOpensAt
+          : dto.registrationOpensAt,
+      registrationClosesAt:
+        dto.registrationClosesAt === undefined
+          ? existing.registrationClosesAt
+          : dto.registrationClosesAt,
+    });
+
+    if (dto.capacity !== undefined && dto.capacity < existing.capacity) {
+      await this.assertCapacityCoversConfirmed(id, dto.capacity);
+    }
+
+    const updated = await this.prisma.event.update({
+      where: { id },
+      // undefined means "leave this column alone" to Prisma and null means "set
+      // it to null", which is exactly the distinction PATCH needs: an absent
+      // field is untouched, an explicit null clears it.
+      data: {
+        title: dto.title,
+        description: dto.description,
+        venue: dto.venue,
+        startsAt: dto.startsAt,
+        endsAt: dto.endsAt,
+        capacity: dto.capacity,
+        waitlistEnabled: dto.waitlistEnabled,
+        registrationOpensAt: dto.registrationOpensAt,
+        registrationClosesAt: dto.registrationClosesAt,
+      },
+    });
+
+    return toEventResponse(updated);
+  }
+
+  /**
+   * Capacity may not be cut below the number of people already holding a seat.
+   *
+   * Allowing it would leave an event overbooked by construction, with no way to
+   * decide which confirmed attendee loses their place.
+   *
+   * This is a read followed by a write, so under concurrency it is advisory:
+   * a registration could land between the count and the update. That race is
+   * the small one — reducing capacity is a rare administrative act — and the
+   * authoritative protection lives on the registration path, which takes a row
+   * lock on the event.
+   */
+  private async assertCapacityCoversConfirmed(eventId: string, capacity: number): Promise<void> {
+    const confirmed = await this.prisma.registration.count({
+      where: { eventId, status: 'CONFIRMED' },
+    });
+
+    if (capacity < confirmed) {
+      throw new ConflictException(
+        `capacity cannot be reduced to ${capacity}: ${confirmed} attendees already hold a confirmed seat`,
+      );
+    }
   }
 
   /**
