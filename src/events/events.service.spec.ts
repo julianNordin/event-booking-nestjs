@@ -1,4 +1,4 @@
-import { NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 
 import type { Event } from '../generated/prisma/client';
@@ -27,11 +27,13 @@ function anEventRow(overrides: Partial<Event> = {}): Event {
 describe('EventsService', () => {
   const findMany = jest.fn();
   const findUnique = jest.fn();
+  const create = jest.fn();
   let service: EventsService;
 
   beforeEach(async () => {
     findMany.mockReset();
     findUnique.mockReset();
+    create.mockReset();
 
     // The reason the DI container is here at all. PrismaService is replaced
     // wholesale by an object that answers the two calls this service makes, so
@@ -40,7 +42,7 @@ describe('EventsService', () => {
     const moduleRef = await Test.createTestingModule({
       providers: [
         EventsService,
-        { provide: PrismaService, useValue: { event: { findMany, findUnique } } },
+        { provide: PrismaService, useValue: { event: { findMany, findUnique, create } } },
       ],
     }).compile();
 
@@ -107,6 +109,125 @@ describe('EventsService', () => {
       findUnique.mockResolvedValue(null);
 
       await expect(service.findOne('0195e3a0-dead')).rejects.toThrow(/0195e3a0-dead/);
+    });
+  });
+
+  describe('create', () => {
+    const validInput = {
+      title: 'Distributed Systems in Practice',
+      venue: 'Norra Latin, Stockholm',
+      startsAt: new Date('2027-03-29T09:00:00.000Z'),
+      endsAt: new Date('2027-03-29T17:00:00.000Z'),
+      capacity: 40,
+    };
+
+    /** The `data` object the service handed to Prisma, typed rather than any. */
+    function writtenData(): Record<string, unknown> {
+      const calls = create.mock.calls as [{ data: Record<string, unknown> }][];
+      const first = calls[0];
+      if (first === undefined) {
+        throw new Error('expected the service to have written something');
+      }
+      return first[0].data;
+    }
+
+    async function captureBadRequest(
+      operation: () => Promise<unknown>,
+    ): Promise<BadRequestException> {
+      try {
+        await operation();
+      } catch (error) {
+        return error as BadRequestException;
+      }
+      throw new Error('expected the service to reject this input');
+    }
+
+    it('writes the fields it was given', async () => {
+      create.mockResolvedValue(anEventRow());
+
+      await service.create(validInput);
+
+      expect(writtenData()).toMatchObject({
+        title: 'Distributed Systems in Practice',
+        venue: 'Norra Latin, Stockholm',
+        capacity: 40,
+        startsAt: validInput.startsAt,
+        endsAt: validInput.endsAt,
+      });
+    });
+
+    it('never sets a status', async () => {
+      // The single most important assertion about create. An event that could
+      // be born PUBLISHED has skipped the state machine entirely.
+      create.mockResolvedValue(anEventRow());
+
+      await service.create(validInput);
+
+      expect(writtenData()).not.toHaveProperty('status');
+    });
+
+    it('defaults the waitlist to enabled and the optional times to null', async () => {
+      // null rather than undefined: undefined tells Prisma "leave this alone",
+      // which means something different on an update and is worth being
+      // consistent about.
+      create.mockResolvedValue(anEventRow());
+
+      await service.create(validInput);
+
+      expect(writtenData()).toMatchObject({
+        waitlistEnabled: true,
+        description: null,
+        registrationOpensAt: null,
+        registrationClosesAt: null,
+      });
+    });
+
+    it('honours an explicitly disabled waitlist', async () => {
+      create.mockResolvedValue(anEventRow());
+
+      await service.create({ ...validInput, waitlistEnabled: false });
+
+      expect(writtenData()).toMatchObject({ waitlistEnabled: false });
+    });
+
+    it('returns a response DTO rather than the row', async () => {
+      create.mockResolvedValue(anEventRow());
+
+      const created = await service.create(validInput);
+
+      expect(typeof created.startsAt).toBe('string');
+    });
+
+    it('refuses an incoherent schedule before touching the database', async () => {
+      // The CHECK constraint would catch this too, but only after a round trip,
+      // and its error names a constraint rather than a field.
+      await expect(
+        service.create({ ...validInput, endsAt: validInput.startsAt }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+
+      expect(create).not.toHaveBeenCalled();
+    });
+
+    it('names the offending field in the rejection', async () => {
+      const error = await captureBadRequest(() =>
+        service.create({ ...validInput, endsAt: validInput.startsAt }),
+      );
+
+      expect(JSON.stringify(error.getResponse())).toMatch(/endsAt/);
+    });
+
+    it('reports every schedule problem at once', async () => {
+      const error = await captureBadRequest(() =>
+        service.create({
+          ...validInput,
+          endsAt: validInput.startsAt,
+          registrationClosesAt: new Date('2027-03-30T00:00:00.000Z'),
+        }),
+      );
+
+      const body = JSON.stringify(error.getResponse());
+      expect(body).toMatch(/endsAt/);
+      expect(body).toMatch(/registrationClosesAt/);
     });
   });
 });

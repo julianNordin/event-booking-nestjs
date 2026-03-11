@@ -5,6 +5,7 @@ import { Test } from '@nestjs/testing';
 import request from 'supertest';
 
 import { GLOBAL_PREFIX } from '../config/app.config';
+import { EVENT_LIMITS } from './event-limits';
 import { configureApp } from '../configure-app';
 import { EventResponseDto } from './dto/event-response.dto';
 import { EventsController } from './events.controller';
@@ -38,13 +39,14 @@ const dto: EventResponseDto = {
 describe('EventsController', () => {
   const findAll = jest.fn();
   const findOne = jest.fn();
+  const create = jest.fn();
   let app: INestApplication;
   let server: Server;
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
       controllers: [EventsController],
-      providers: [{ provide: EventsService, useValue: { findAll, findOne } }],
+      providers: [{ provide: EventsService, useValue: { findAll, findOne, create } }],
     }).compile();
 
     app = configureApp(moduleRef.createNestApplication());
@@ -59,6 +61,7 @@ describe('EventsController', () => {
   beforeEach(() => {
     findAll.mockReset();
     findOne.mockReset();
+    create.mockReset();
   });
 
   describe('GET /events', () => {
@@ -104,6 +107,102 @@ describe('EventsController', () => {
       await request(server).get(`/${GLOBAL_PREFIX}/events/${V4_ID}`).expect(400);
 
       expect(findOne).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('POST /events', () => {
+    const body = {
+      title: 'Distributed Systems in Practice',
+      venue: 'Norra Latin, Stockholm',
+      startsAt: '2027-03-29T09:00:00.000Z',
+      endsAt: '2027-03-29T17:00:00.000Z',
+      capacity: 40,
+    };
+
+    it('answers 201 with the created event', async () => {
+      create.mockResolvedValue(dto);
+
+      const response = await request(server)
+        .post(`/${GLOBAL_PREFIX}/events`)
+        .send(body)
+        .expect(201);
+
+      expect(response.body).toEqual(dto);
+    });
+
+    it('returns a Location header that resolves to the new event', async () => {
+      // 201 without Location says something was created and refuses to say
+      // where. The header is asserted as a path a client can actually follow.
+      create.mockResolvedValue(dto);
+
+      const response = await request(server)
+        .post(`/${GLOBAL_PREFIX}/events`)
+        .send(body)
+        .expect(201);
+
+      const location = String(response.headers.location);
+      expect(location).toBe(`/${GLOBAL_PREFIX}/events/${V7_ID}`);
+
+      findOne.mockResolvedValue(dto);
+      await request(server).get(location).expect(200);
+    });
+
+    it('converts the ISO strings to Dates before the service sees them', async () => {
+      create.mockResolvedValue(dto);
+
+      await request(server).post(`/${GLOBAL_PREFIX}/events`).send(body).expect(201);
+
+      const [received] = create.mock.calls[0] as [Record<string, unknown>];
+      expect(received.startsAt).toBeInstanceOf(Date);
+      expect((received.startsAt as Date).toISOString()).toBe('2027-03-29T09:00:00.000Z');
+    });
+
+    it.each([
+      ['a missing title', { ...body, title: undefined }],
+      ['an empty title', { ...body, title: '' }],
+      ['a missing venue', { ...body, venue: undefined }],
+      ['a capacity of zero', { ...body, capacity: 0 }],
+      ['a negative capacity', { ...body, capacity: -1 }],
+      ['a fractional capacity', { ...body, capacity: 2.5 }],
+      ['a capacity beyond the sane bound', { ...body, capacity: 10_000_000 }],
+      ['a start time that is not a date', { ...body, startsAt: 'next tuesday' }],
+      ['a missing end time', { ...body, endsAt: undefined }],
+    ])('rejects %s', async (_label, payload) => {
+      await request(server).post(`/${GLOBAL_PREFIX}/events`).send(payload).expect(400);
+
+      expect(create).not.toHaveBeenCalled();
+    });
+
+    it('rejects a status supplied by the client', async () => {
+      // The route around the state machine. forbidNonWhitelisted turns it into
+      // a 400 rather than a value that is quietly discarded.
+      const response = await request(server)
+        .post(`/${GLOBAL_PREFIX}/events`)
+        .send({ ...body, status: 'PUBLISHED' })
+        .expect(400);
+
+      expect(JSON.stringify(response.body)).toMatch(/status/);
+      expect(create).not.toHaveBeenCalled();
+    });
+
+    it('accepts a title of exactly the declared column width', async () => {
+      create.mockResolvedValue(dto);
+
+      await request(server)
+        .post(`/${GLOBAL_PREFIX}/events`)
+        .send({ ...body, title: 'x'.repeat(EVENT_LIMITS.title) })
+        .expect(201);
+    });
+
+    it('rejects a title one character wider than the column', async () => {
+      // Without this the database refuses it instead, as a driver error that
+      // names a constraint rather than a field.
+      await request(server)
+        .post(`/${GLOBAL_PREFIX}/events`)
+        .send({ ...body, title: 'x'.repeat(EVENT_LIMITS.title + 1) })
+        .expect(400);
+
+      expect(create).not.toHaveBeenCalled();
     });
   });
 });
