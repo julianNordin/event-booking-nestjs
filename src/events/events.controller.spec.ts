@@ -1,6 +1,6 @@
 import type { Server } from 'node:http';
 
-import { INestApplication, NotFoundException } from '@nestjs/common';
+import { ConflictException, INestApplication, NotFoundException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 
@@ -41,13 +41,21 @@ describe('EventsController', () => {
   const findOne = jest.fn();
   const create = jest.fn();
   const update = jest.fn();
+  const publish = jest.fn();
+  const cancel = jest.fn();
+  const remove = jest.fn();
   let app: INestApplication;
   let server: Server;
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
       controllers: [EventsController],
-      providers: [{ provide: EventsService, useValue: { findAll, findOne, create, update } }],
+      providers: [
+        {
+          provide: EventsService,
+          useValue: { findAll, findOne, create, update, publish, cancel, remove },
+        },
+      ],
     }).compile();
 
     app = configureApp(moduleRef.createNestApplication());
@@ -64,6 +72,9 @@ describe('EventsController', () => {
     findOne.mockReset();
     create.mockReset();
     update.mockReset();
+    publish.mockReset();
+    cancel.mockReset();
+    remove.mockReset();
   });
 
   describe('GET /events', () => {
@@ -251,6 +262,72 @@ describe('EventsController', () => {
         .expect(400);
 
       expect(update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('the lifecycle routes', () => {
+    it('POST /events/:id/publish returns 200 and the updated event', async () => {
+      publish.mockResolvedValue({ ...dto, status: 'PUBLISHED' });
+
+      const response = await request(server)
+        .post(`/${GLOBAL_PREFIX}/events/${V7_ID}/publish`)
+        .expect(200);
+
+      expect(response.body).toMatchObject({ status: 'PUBLISHED' });
+      expect(publish).toHaveBeenCalledWith(V7_ID);
+    });
+
+    it('POST /events/:id/cancel returns 200 and the updated event', async () => {
+      cancel.mockResolvedValue({ ...dto, status: 'CANCELLED' });
+
+      const response = await request(server)
+        .post(`/${GLOBAL_PREFIX}/events/${V7_ID}/cancel`)
+        .expect(200);
+
+      expect(response.body).toMatchObject({ status: 'CANCELLED' });
+      expect(cancel).toHaveBeenCalledWith(V7_ID);
+    });
+
+    it('surfaces a refused transition as 409', async () => {
+      publish.mockRejectedValue(new ConflictException('this event is already published'));
+
+      const response = await request(server)
+        .post(`/${GLOBAL_PREFIX}/events/${V7_ID}/publish`)
+        .expect(409);
+
+      // The reason travels to the client. "Conflict" on its own tells a caller
+      // that something is wrong and nothing about what.
+      expect(JSON.stringify(response.body)).toMatch(/already published/);
+    });
+
+    it('DELETE /events/:id returns 204 with no body', async () => {
+      remove.mockResolvedValue(undefined);
+
+      const response = await request(server)
+        .delete(`/${GLOBAL_PREFIX}/events/${V7_ID}`)
+        .expect(204);
+
+      expect(response.body).toEqual({});
+      expect(remove).toHaveBeenCalledWith(V7_ID);
+    });
+
+    it('surfaces a refused delete as 409 with its reason', async () => {
+      remove.mockRejectedValue(
+        new ConflictException('a published event cannot be deleted; cancel it instead'),
+      );
+
+      const response = await request(server)
+        .delete(`/${GLOBAL_PREFIX}/events/${V7_ID}`)
+        .expect(409);
+
+      expect(JSON.stringify(response.body)).toMatch(/cancel it instead/);
+    });
+
+    it.each(['publish', 'cancel'])('validates the id before %sing', async (action) => {
+      await request(server).post(`/${GLOBAL_PREFIX}/events/not-a-uuid/${action}`).expect(400);
+
+      expect(publish).not.toHaveBeenCalled();
+      expect(cancel).not.toHaveBeenCalled();
     });
   });
 });

@@ -30,6 +30,20 @@ describe('EventsService', () => {
   const create = jest.fn();
   const update = jest.fn();
   const count = jest.fn();
+  const deleteFn = jest.fn();
+  const txEventUpdate = jest.fn();
+  const txRegistrationUpdateMany = jest.fn();
+
+  // $transaction(fn) hands the callback a client scoped to the transaction.
+  // The mock runs the callback immediately against a stand-in, so the test can
+  // assert what happened *inside* the transaction rather than only that one was
+  // opened.
+  const $transaction = jest.fn(async (run: (tx: unknown) => Promise<unknown>) =>
+    run({
+      event: { update: txEventUpdate },
+      registration: { updateMany: txRegistrationUpdateMany },
+    }),
+  );
   let service: EventsService;
 
   beforeEach(async () => {
@@ -38,6 +52,10 @@ describe('EventsService', () => {
     create.mockReset();
     update.mockReset();
     count.mockReset();
+    deleteFn.mockReset();
+    txEventUpdate.mockReset();
+    txRegistrationUpdateMany.mockReset();
+    $transaction.mockClear();
 
     // The reason the DI container is here at all. PrismaService is replaced
     // wholesale by an object that answers the two calls this service makes, so
@@ -49,8 +67,9 @@ describe('EventsService', () => {
         {
           provide: PrismaService,
           useValue: {
-            event: { findMany, findUnique, create, update },
+            event: { findMany, findUnique, create, update, delete: deleteFn },
             registration: { count },
+            $transaction,
           },
         },
       ],
@@ -381,6 +400,122 @@ describe('EventsService', () => {
         count.mockResolvedValue(12);
 
         await expect(service.update(id, { capacity: 5 })).rejects.toThrow(/12/);
+      });
+    });
+  });
+
+  describe('publish, cancel and delete', () => {
+    const id = '0195e3a0-0000-7000-8000-000000000001';
+
+    describe('publish', () => {
+      it('moves a draft to published', async () => {
+        findUnique.mockResolvedValue(anEventRow({ status: 'DRAFT' }));
+        update.mockResolvedValue(anEventRow({ status: 'PUBLISHED' }));
+
+        await expect(service.publish(id)).resolves.toMatchObject({ status: 'PUBLISHED' });
+        expect(update).toHaveBeenCalledWith({ where: { id }, data: { status: 'PUBLISHED' } });
+      });
+
+      it('refuses to publish an already published event, with the reason', async () => {
+        findUnique.mockResolvedValue(anEventRow({ status: 'PUBLISHED' }));
+
+        await expect(service.publish(id)).rejects.toThrow(/already published/);
+        expect(update).not.toHaveBeenCalled();
+      });
+
+      it('refuses to republish a cancelled event', async () => {
+        findUnique.mockResolvedValue(anEventRow({ status: 'CANCELLED' }));
+
+        await expect(service.publish(id)).rejects.toBeInstanceOf(ConflictException);
+      });
+
+      it('raises not-found before consulting the state machine', async () => {
+        findUnique.mockResolvedValue(null);
+
+        await expect(service.publish(id)).rejects.toBeInstanceOf(NotFoundException);
+      });
+    });
+
+    describe('cancel', () => {
+      it('cancels the event and its registrations in one transaction', async () => {
+        // The two writes must land together. The event alone leaves rows
+        // claiming confirmed seats at something that is not running; the
+        // registrations alone loses the status if the second write fails.
+        findUnique.mockResolvedValue(anEventRow({ status: 'PUBLISHED' }));
+        txEventUpdate.mockResolvedValue(anEventRow({ status: 'CANCELLED' }));
+
+        await expect(service.cancel(id)).resolves.toMatchObject({ status: 'CANCELLED' });
+
+        expect($transaction).toHaveBeenCalledTimes(1);
+        expect(txRegistrationUpdateMany).toHaveBeenCalledWith({
+          where: { eventId: id, status: { in: ['CONFIRMED', 'WAITLISTED'] } },
+          data: {
+            status: 'CANCELLED',
+            cancelledAt: expect.any(Date) as Date,
+            waitlistPosition: null,
+          },
+        });
+        expect(txEventUpdate).toHaveBeenCalledWith({
+          where: { id },
+          data: { status: 'CANCELLED' },
+        });
+      });
+
+      it('leaves already-cancelled registrations alone', async () => {
+        findUnique.mockResolvedValue(anEventRow({ status: 'PUBLISHED' }));
+        txEventUpdate.mockResolvedValue(anEventRow({ status: 'CANCELLED' }));
+
+        await service.cancel(id);
+
+        const calls = txRegistrationUpdateMany.mock.calls as [
+          { where: { status: { in: string[] } } },
+        ][];
+        expect(calls[0]?.[0].where.status.in).not.toContain('CANCELLED');
+      });
+
+      it('refuses to cancel a draft and says to delete it instead', async () => {
+        findUnique.mockResolvedValue(anEventRow({ status: 'DRAFT' }));
+
+        await expect(service.cancel(id)).rejects.toThrow(/delete/);
+        expect($transaction).not.toHaveBeenCalled();
+      });
+
+      it('refuses to cancel twice', async () => {
+        findUnique.mockResolvedValue(anEventRow({ status: 'CANCELLED' }));
+
+        await expect(service.cancel(id)).rejects.toThrow(/already cancelled/);
+      });
+    });
+
+    describe('remove', () => {
+      it('deletes a draft', async () => {
+        findUnique.mockResolvedValue(anEventRow({ status: 'DRAFT' }));
+        deleteFn.mockResolvedValue(anEventRow());
+
+        await service.remove(id);
+
+        expect(deleteFn).toHaveBeenCalledWith({ where: { id } });
+      });
+
+      it('refuses to delete a published event and points at cancel', async () => {
+        // Deleting would cascade its registrations away without a trace.
+        findUnique.mockResolvedValue(anEventRow({ status: 'PUBLISHED' }));
+
+        await expect(service.remove(id)).rejects.toThrow(/cancel/);
+        expect(deleteFn).not.toHaveBeenCalled();
+      });
+
+      it('refuses to delete a cancelled event, which is kept as a record', async () => {
+        findUnique.mockResolvedValue(anEventRow({ status: 'CANCELLED' }));
+
+        await expect(service.remove(id)).rejects.toBeInstanceOf(ConflictException);
+        expect(deleteFn).not.toHaveBeenCalled();
+      });
+
+      it('raises not-found for an event that is not there', async () => {
+        findUnique.mockResolvedValue(null);
+
+        await expect(service.remove(id)).rejects.toBeInstanceOf(NotFoundException);
       });
     });
   });

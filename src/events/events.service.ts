@@ -5,12 +5,14 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 
+import type { Event as PrismaEvent } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateEventDto } from './dto/create-event.dto';
 import { EventResponseDto } from './dto/event-response.dto';
 import { UpdateEventDto } from './dto/update-event.dto';
 import { toEventResponse } from './event.mapper';
 import { EventSchedule, validateSchedule } from './event-schedule';
+import { applyAction, canDelete, EventAction } from './event-status';
 
 @Injectable()
 export class EventsService {
@@ -64,11 +66,7 @@ export class EventsService {
   }
 
   async update(id: string, dto: UpdateEventDto): Promise<EventResponseDto> {
-    const existing = await this.prisma.event.findUnique({ where: { id } });
-
-    if (existing === null) {
-      throw new NotFoundException(`No event with id ${id}`);
-    }
+    const existing = await this.requireEvent(id);
 
     if (existing.status === 'CANCELLED') {
       // Terminal in the state machine, and terminal here too. A cancelled
@@ -141,6 +139,83 @@ export class EventsService {
         `capacity cannot be reduced to ${capacity}: ${confirmed} attendees already hold a confirmed seat`,
       );
     }
+  }
+
+  publish(id: string): Promise<EventResponseDto> {
+    return this.runAction(id, 'publish');
+  }
+
+  cancel(id: string): Promise<EventResponseDto> {
+    return this.runAction(id, 'cancel');
+  }
+
+  async remove(id: string): Promise<void> {
+    const existing = await this.requireEvent(id);
+    const outcome = canDelete(existing.status);
+
+    if (!outcome.allowed) {
+      throw new ConflictException(outcome.reason);
+    }
+
+    await this.prisma.event.delete({ where: { id } });
+  }
+
+  /**
+   * Runs one transition of the state machine.
+   *
+   * The decision itself is the pure `applyAction`; everything here is the I/O
+   * around it. That separation is what lets every status and action pair be
+   * covered without a database, leaving these tests to cover only the parts
+   * that genuinely need one.
+   */
+  private async runAction(id: string, action: EventAction): Promise<EventResponseDto> {
+    const existing = await this.requireEvent(id);
+    const outcome = applyAction(existing.status, action);
+
+    if (!outcome.allowed) {
+      throw new ConflictException(outcome.reason);
+    }
+
+    if (outcome.to !== 'CANCELLED') {
+      const updated = await this.prisma.event.update({
+        where: { id },
+        data: { status: outcome.to },
+      });
+
+      return toEventResponse(updated);
+    }
+
+    // Cancelling an event cancels everyone's place in it, and the two must
+    // happen together. Cancelling the event alone leaves rows that claim to be
+    // confirmed seats at something that is not running; cancelling the
+    // registrations alone loses the event's own status if the second write
+    // fails. One transaction, or neither.
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await tx.registration.updateMany({
+        where: { eventId: id, status: { in: ['CONFIRMED', 'WAITLISTED'] } },
+        data: {
+          status: 'CANCELLED',
+          cancelledAt: new Date(),
+          // The queue is gone with the event; leaving positions behind would
+          // have them re-used if the rows were ever revived.
+          waitlistPosition: null,
+        },
+      });
+
+      return tx.event.update({ where: { id }, data: { status: 'CANCELLED' } });
+    });
+
+    return toEventResponse(updated);
+  }
+
+  private async requireEvent(id: string): Promise<PrismaEvent> {
+    const event = await this.prisma.event.findUnique({ where: { id } });
+
+    if (event === null) {
+      throw new NotFoundException(`No event with id ${id}`);
+    }
+
+    return event;
   }
 
   /**

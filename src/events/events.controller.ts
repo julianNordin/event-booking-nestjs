@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   HttpStatus,
@@ -69,5 +70,27 @@ export class EventsController {
     @Body() dto: UpdateEventDto,
   ): Promise<EventResponseDto> {
     return this.events.update(id, dto);
+  }
+
+  // Publish and cancel are POSTs to named sub-resources rather than a PATCH of
+  // the status field. They are not field assignments — each one runs a rule
+  // that can refuse, and cancelling additionally cancels every registration.
+  // A verb the client can name is honest about that; PATCH { status } is not.
+  @Post(':id/publish')
+  @HttpCode(HttpStatus.OK)
+  publish(@Param('id', new ParseUUIDPipe({ version: '7' })) id: string): Promise<EventResponseDto> {
+    return this.events.publish(id);
+  }
+
+  @Post(':id/cancel')
+  @HttpCode(HttpStatus.OK)
+  cancel(@Param('id', new ParseUUIDPipe({ version: '7' })) id: string): Promise<EventResponseDto> {
+    return this.events.cancel(id);
+  }
+
+  @Delete(':id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  remove(@Param('id', new ParseUUIDPipe({ version: '7' })) id: string): Promise<void> {
+    return this.events.remove(id);
   }
 }
