@@ -55,7 +55,7 @@ are not testable against a mock.
 - [x] 05 — DB test harness (Testcontainers)
 - [x] 06 — Events: read endpoints
 - [x] 07 — Events: writes & the status state machine
-- [ ] 08 — Problem Details & Prisma error mapping
+- [x] 08 — Problem Details & Prisma error mapping
 - [ ] 09 — Paging, sorting, filtering, search
 - [ ] 10 — Attendees
 - [ ] 11 — Registration: rules engine & happy path
