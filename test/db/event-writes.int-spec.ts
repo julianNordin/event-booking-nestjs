@@ -1,4 +1,7 @@
-import { ConflictException } from '@nestjs/common';
+import {
+  RuleViolationError,
+  TransitionNotAllowedError,
+} from '../../src/common/errors/domain-error';
 import { Test } from '@nestjs/testing';
 
 import { EVENT_LIMITS } from '../../src/events/event-limits';
@@ -129,7 +132,7 @@ describe('event writes against a real database', () => {
       const event = await createEvent({ status: 'PUBLISHED' });
       await fillEvent(event.id, 2);
 
-      await expect(service.remove(event.id)).rejects.toBeInstanceOf(ConflictException);
+      await expect(service.remove(event.id)).rejects.toBeInstanceOf(TransitionNotAllowedError);
 
       await expect(prisma.event.count()).resolves.toBe(1);
       await expect(prisma.registration.count()).resolves.toBe(2);
@@ -142,7 +145,7 @@ describe('event writes against a real database', () => {
       await fillEvent(event.id, 4);
 
       await expect(service.update(event.id, { capacity: 3 })).rejects.toBeInstanceOf(
-        ConflictException,
+        RuleViolationError,
       );
 
       const stored = await prisma.event.findUniqueOrThrow({ where: { id: event.id } });

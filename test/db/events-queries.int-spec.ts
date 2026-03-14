@@ -1,4 +1,4 @@
-import { NotFoundException } from '@nestjs/common';
+import { ResourceNotFoundError } from '../../src/common/errors/domain-error';
 import { Test } from '@nestjs/testing';
 
 import { EventsService } from '../../src/events/events.service';
@@ -119,7 +119,7 @@ describe('EventsService against a real database', () => {
 
     it('raises not-found for a well-formed id that does not exist', async () => {
       await expect(service.findOne('0195e3a0-0000-7000-8000-0000deadbeef')).rejects.toBeInstanceOf(
-        NotFoundException,
+        ResourceNotFoundError,
       );
     });
 
@@ -127,7 +127,7 @@ describe('EventsService against a real database', () => {
       await createEvent();
 
       await expect(service.findOne('0195e3a0-0000-7000-8000-0000deadbeef')).rejects.toBeInstanceOf(
-        NotFoundException,
+        ResourceNotFoundError,
       );
     });
   });

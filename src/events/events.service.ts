@@ -1,10 +1,11 @@
-import {
-  BadRequestException,
-  ConflictException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 
+import {
+  ResourceNotFoundError,
+  RuleViolationError,
+  TransitionNotAllowedError,
+  ValidationFailedError,
+} from '../common/errors/domain-error';
 import type { Event as PrismaEvent } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateEventDto } from './dto/create-event.dto';
@@ -34,7 +35,7 @@ export class EventsService {
     const event = await this.prisma.event.findUnique({ where: { id } });
 
     if (event === null) {
-      throw new NotFoundException(`No event with id ${id}`);
+      throw new ResourceNotFoundError('event', id);
     }
 
     return toEventResponse(event);
@@ -72,7 +73,11 @@ export class EventsService {
       // Terminal in the state machine, and terminal here too. A cancelled
       // event is the record of something that was called off; editing it
       // rewrites what attendees were told.
-      throw new ConflictException('a cancelled event cannot be edited');
+      throw new TransitionNotAllowedError(
+        'a cancelled event is the record of something called off and cannot be edited',
+        'CANCELLED',
+        'update',
+      );
     }
 
     // The schedule rules apply to the event as it will be, not to the fields
@@ -135,8 +140,10 @@ export class EventsService {
     });
 
     if (capacity < confirmed) {
-      throw new ConflictException(
-        `capacity cannot be reduced to ${capacity}: ${confirmed} attendees already hold a confirmed seat`,
+      throw new RuleViolationError(
+        `capacity cannot be reduced to ${String(capacity)}: ${String(confirmed)} attendees already hold a confirmed seat`,
+        'capacity-covers-confirmed',
+        { requested: capacity, confirmed },
       );
     }
   }
@@ -154,7 +161,7 @@ export class EventsService {
     const outcome = canDelete(existing.status);
 
     if (!outcome.allowed) {
-      throw new ConflictException(outcome.reason);
+      throw new TransitionNotAllowedError(outcome.reason, existing.status, 'delete');
     }
 
     await this.prisma.event.delete({ where: { id } });
@@ -173,7 +180,7 @@ export class EventsService {
     const outcome = applyAction(existing.status, action);
 
     if (!outcome.allowed) {
-      throw new ConflictException(outcome.reason);
+      throw new TransitionNotAllowedError(outcome.reason, existing.status, action);
     }
 
     if (outcome.to !== 'CANCELLED') {
@@ -212,7 +219,7 @@ export class EventsService {
     const event = await this.prisma.event.findUnique({ where: { id } });
 
     if (event === null) {
-      throw new NotFoundException(`No event with id ${id}`);
+      throw new ResourceNotFoundError('event', id);
     }
 
     return event;
@@ -229,10 +236,7 @@ export class EventsService {
     const violations = validateSchedule(schedule);
 
     if (violations.length > 0) {
-      throw new BadRequestException({
-        message: violations.map((violation) => `${violation.field}: ${violation.message}`),
-        errors: violations,
-      });
+      throw new ValidationFailedError(violations);
     }
   }
 }

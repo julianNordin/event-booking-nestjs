@@ -1,4 +1,9 @@
-import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
+import {
+  ResourceNotFoundError,
+  RuleViolationError,
+  TransitionNotAllowedError,
+  ValidationFailedError,
+} from '../common/errors/domain-error';
 import { Test } from '@nestjs/testing';
 
 import type { Event } from '../generated/prisma/client';
@@ -131,7 +136,7 @@ describe('EventsService', () => {
       // one to forget answers 200 with an empty body.
       findUnique.mockResolvedValue(null);
 
-      await expect(service.findOne('missing')).rejects.toBeInstanceOf(NotFoundException);
+      await expect(service.findOne('missing')).rejects.toBeInstanceOf(ResourceNotFoundError);
     });
 
     it('names the id it could not find', async () => {
@@ -160,13 +165,13 @@ describe('EventsService', () => {
       return first[0].data;
     }
 
-    async function captureBadRequest(
+    async function captureValidationFailure(
       operation: () => Promise<unknown>,
-    ): Promise<BadRequestException> {
+    ): Promise<ValidationFailedError> {
       try {
         await operation();
       } catch (error) {
-        return error as BadRequestException;
+        return error as ValidationFailedError;
       }
       throw new Error('expected the service to reject this input');
     }
@@ -232,21 +237,21 @@ describe('EventsService', () => {
       // and its error names a constraint rather than a field.
       await expect(
         service.create({ ...validInput, endsAt: validInput.startsAt }),
-      ).rejects.toBeInstanceOf(BadRequestException);
+      ).rejects.toBeInstanceOf(ValidationFailedError);
 
       expect(create).not.toHaveBeenCalled();
     });
 
     it('names the offending field in the rejection', async () => {
-      const error = await captureBadRequest(() =>
+      const error = await captureValidationFailure(() =>
         service.create({ ...validInput, endsAt: validInput.startsAt }),
       );
 
-      expect(JSON.stringify(error.getResponse())).toMatch(/endsAt/);
+      expect(JSON.stringify(error.errors)).toMatch(/endsAt/);
     });
 
     it('reports every schedule problem at once', async () => {
-      const error = await captureBadRequest(() =>
+      const error = await captureValidationFailure(() =>
         service.create({
           ...validInput,
           endsAt: validInput.startsAt,
@@ -254,7 +259,7 @@ describe('EventsService', () => {
         }),
       );
 
-      const body = JSON.stringify(error.getResponse());
+      const body = JSON.stringify(error.errors);
       expect(body).toMatch(/endsAt/);
       expect(body).toMatch(/registrationClosesAt/);
     });
@@ -275,7 +280,9 @@ describe('EventsService', () => {
     it('raises not-found when the event does not exist', async () => {
       findUnique.mockResolvedValue(null);
 
-      await expect(service.update(id, { title: 'x' })).rejects.toBeInstanceOf(NotFoundException);
+      await expect(service.update(id, { title: 'x' })).rejects.toBeInstanceOf(
+        ResourceNotFoundError,
+      );
       expect(update).not.toHaveBeenCalled();
     });
 
@@ -284,7 +291,9 @@ describe('EventsService', () => {
       // something called off, and editing it rewrites what attendees were told.
       findUnique.mockResolvedValue(anEventRow({ status: 'CANCELLED' }));
 
-      await expect(service.update(id, { title: 'x' })).rejects.toBeInstanceOf(ConflictException);
+      await expect(service.update(id, { title: 'x' })).rejects.toBeInstanceOf(
+        TransitionNotAllowedError,
+      );
       expect(update).not.toHaveBeenCalled();
     });
 
@@ -323,7 +332,7 @@ describe('EventsService', () => {
 
         await expect(
           service.update(id, { endsAt: new Date('2027-03-29T08:00:00.000Z') }),
-        ).rejects.toBeInstanceOf(BadRequestException);
+        ).rejects.toBeInstanceOf(ValidationFailedError);
 
         expect(update).not.toHaveBeenCalled();
       });
@@ -338,7 +347,7 @@ describe('EventsService', () => {
 
         await expect(
           service.update(id, { startsAt: new Date('2027-03-29T18:00:00.000Z') }),
-        ).rejects.toBeInstanceOf(BadRequestException);
+        ).rejects.toBeInstanceOf(ValidationFailedError);
       });
 
       it('accepts a coherent pair moved together', async () => {
@@ -379,7 +388,9 @@ describe('EventsService', () => {
         findUnique.mockResolvedValue(anEventRow({ capacity: 40 }));
         count.mockResolvedValue(10);
 
-        await expect(service.update(id, { capacity: 9 })).rejects.toBeInstanceOf(ConflictException);
+        await expect(service.update(id, { capacity: 9 })).rejects.toBeInstanceOf(
+          RuleViolationError,
+        );
         expect(update).not.toHaveBeenCalled();
       });
 
@@ -426,13 +437,13 @@ describe('EventsService', () => {
       it('refuses to republish a cancelled event', async () => {
         findUnique.mockResolvedValue(anEventRow({ status: 'CANCELLED' }));
 
-        await expect(service.publish(id)).rejects.toBeInstanceOf(ConflictException);
+        await expect(service.publish(id)).rejects.toBeInstanceOf(TransitionNotAllowedError);
       });
 
       it('raises not-found before consulting the state machine', async () => {
         findUnique.mockResolvedValue(null);
 
-        await expect(service.publish(id)).rejects.toBeInstanceOf(NotFoundException);
+        await expect(service.publish(id)).rejects.toBeInstanceOf(ResourceNotFoundError);
       });
     });
 
@@ -508,14 +519,14 @@ describe('EventsService', () => {
       it('refuses to delete a cancelled event, which is kept as a record', async () => {
         findUnique.mockResolvedValue(anEventRow({ status: 'CANCELLED' }));
 
-        await expect(service.remove(id)).rejects.toBeInstanceOf(ConflictException);
+        await expect(service.remove(id)).rejects.toBeInstanceOf(TransitionNotAllowedError);
         expect(deleteFn).not.toHaveBeenCalled();
       });
 
       it('raises not-found for an event that is not there', async () => {
         findUnique.mockResolvedValue(null);
 
-        await expect(service.remove(id)).rejects.toBeInstanceOf(NotFoundException);
+        await expect(service.remove(id)).rejects.toBeInstanceOf(ResourceNotFoundError);
       });
     });
   });

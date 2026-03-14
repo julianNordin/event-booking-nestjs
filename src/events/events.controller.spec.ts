@@ -1,9 +1,10 @@
 import type { Server } from 'node:http';
 
-import { ConflictException, INestApplication, NotFoundException } from '@nestjs/common';
+import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 
+import { ResourceNotFoundError, TransitionNotAllowedError } from '../common/errors/domain-error';
 import { GLOBAL_PREFIX } from '../config/app.config';
 import { EVENT_LIMITS } from './event-limits';
 import { configureApp } from '../configure-app';
@@ -102,7 +103,7 @@ describe('EventsController', () => {
     });
 
     it('answers 404 when the service cannot find it', async () => {
-      findOne.mockRejectedValue(new NotFoundException('No event with id x'));
+      findOne.mockRejectedValue(new ResourceNotFoundError('event', V7_ID));
 
       await request(server).get(`/${GLOBAL_PREFIX}/events/${V7_ID}`).expect(404);
     });
@@ -289,7 +290,9 @@ describe('EventsController', () => {
     });
 
     it('surfaces a refused transition as 409', async () => {
-      publish.mockRejectedValue(new ConflictException('this event is already published'));
+      publish.mockRejectedValue(
+        new TransitionNotAllowedError('this event is already published', 'PUBLISHED', 'publish'),
+      );
 
       const response = await request(server)
         .post(`/${GLOBAL_PREFIX}/events/${V7_ID}/publish`)
@@ -313,7 +316,11 @@ describe('EventsController', () => {
 
     it('surfaces a refused delete as 409 with its reason', async () => {
       remove.mockRejectedValue(
-        new ConflictException('a published event cannot be deleted; cancel it instead'),
+        new TransitionNotAllowedError(
+          'a published event cannot be deleted; cancel it instead',
+          'PUBLISHED',
+          'delete',
+        ),
       );
 
       const response = await request(server)
