@@ -43,13 +43,19 @@ export class ResourceNotFoundError extends DomainError {
 
   constructor(
     readonly resource: string,
-    readonly resourceId: string,
+    // Optional because a P2025 from the driver says which model was missing but
+    // not which row: the record was gone by the time the write reached it.
+    readonly resourceId?: string,
   ) {
-    super(`No ${resource} with id ${resourceId}`);
+    super(
+      resourceId === undefined ? `No such ${resource}` : `No ${resource} with id ${resourceId}`,
+    );
   }
 
   override extensions(): Record<string, unknown> {
-    return { resource: this.resource, resourceId: this.resourceId };
+    return this.resourceId === undefined
+      ? { resource: this.resource }
+      : { resource: this.resource, resourceId: this.resourceId };
   }
 }
 
