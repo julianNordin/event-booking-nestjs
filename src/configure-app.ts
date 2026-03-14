@@ -1,4 +1,10 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
+import { HttpAdapterHost } from '@nestjs/core';
+import type { ValidationError } from 'class-validator';
+
+import { ProblemDetailsFilter } from './common/filters/problem-details.filter';
+import { ValidationFailedError } from './common/errors/domain-error';
+import { toFieldErrors } from './common/errors/validation-errors';
 
 import { GLOBAL_PREFIX } from './config/app.config';
 
@@ -29,8 +35,18 @@ export function configureApp(app: INestApplication): INestApplication {
         // converts with an explicit @Type, the way the env schema does.
         enableImplicitConversion: false,
       },
+      // Nest's default turns the validation tree into an array of sentences,
+      // which is readable and not actionable: a form cannot highlight a field
+      // it has to find by parsing prose. Raising a domain error instead means
+      // the same filter renders it, with a per-field list a client can use.
+      exceptionFactory: (errors: ValidationError[]) =>
+        new ValidationFailedError(toFieldErrors(errors)),
     }),
   );
+
+  // Registered through HttpAdapterHost rather than by grabbing the Express
+  // response, so it works on whichever adapter the app is running on.
+  app.useGlobalFilters(new ProblemDetailsFilter(app.get(HttpAdapterHost)));
 
   // Nest only forwards SIGTERM and friends to onModuleDestroy/onApplicationShutdown
   // once this is called. Without it a container restart drops the connection
