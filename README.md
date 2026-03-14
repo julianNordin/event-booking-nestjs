@@ -56,7 +56,7 @@ are not testable against a mock.
 - [x] 06 — Events: read endpoints
 - [x] 07 — Events: writes & the status state machine
 - [x] 08 — Problem Details & Prisma error mapping
-- [ ] 09 — Paging, sorting, filtering, search
+- [x] 09 — Paging, sorting, filtering, search
 - [ ] 10 — Attendees
 - [ ] 11 — Registration: rules engine & happy path
 - [ ] 12 — Capacity under concurrency
