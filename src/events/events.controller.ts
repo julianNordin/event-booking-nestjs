@@ -9,6 +9,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Query,
   Res,
 } from '@nestjs/common';
 // Type-only: it appears in a decorated signature, and @Res() is what tells Nest
@@ -17,8 +18,10 @@ import type { Response } from 'express';
 
 import { GLOBAL_PREFIX } from '../config/app.config';
 import { CreateEventDto } from './dto/create-event.dto';
+import { ListEventsQueryDto } from './dto/list-events-query.dto';
 import { UpdateEventDto } from './dto/update-event.dto';
 
+import { PagedResponse } from '../common/dto/paged-response';
 import { EventResponseDto } from './dto/event-response.dto';
 import { EventsService } from './events.service';
 
@@ -32,8 +35,8 @@ export class EventsController {
   constructor(private readonly events: EventsService) {}
 
   @Get()
-  findAll(): Promise<EventResponseDto[]> {
-    return this.events.findAll();
+  findAll(@Query() query: ListEventsQueryDto): Promise<PagedResponse<EventResponseDto>> {
+    return this.events.findAll(query);
   }
 
   @Post()

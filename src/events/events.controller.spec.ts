@@ -5,6 +5,7 @@ import { Test } from '@nestjs/testing';
 import request from 'supertest';
 
 import { ResourceNotFoundError, TransitionNotAllowedError } from '../common/errors/domain-error';
+import { PagedResponse } from '../common/dto/paged-response';
 import { GLOBAL_PREFIX } from '../config/app.config';
 import { EVENT_LIMITS } from './event-limits';
 import { configureApp } from '../configure-app';
@@ -79,18 +80,60 @@ describe('EventsController', () => {
   });
 
   describe('GET /events', () => {
-    it('returns the events the service produced', async () => {
-      findAll.mockResolvedValue([dto]);
+    const page = PagedResponse.of([dto], 1, 20, 1);
+
+    it('returns the page the service produced', async () => {
+      findAll.mockResolvedValue(page);
 
       const response = await request(server).get(`/${GLOBAL_PREFIX}/events`).expect(200);
 
-      expect(response.body).toEqual([dto]);
+      expect(response.body).toEqual(page);
     });
 
-    it('returns an empty array when there are none', async () => {
-      findAll.mockResolvedValue([]);
+    it('returns an empty page when there are none', async () => {
+      findAll.mockResolvedValue(PagedResponse.of([], 1, 20, 0));
 
-      await request(server).get(`/${GLOBAL_PREFIX}/events`).expect(200, []);
+      const response = await request(server).get(`/${GLOBAL_PREFIX}/events`).expect(200);
+
+      expect(response.body).toMatchObject({ items: [], totalItems: 0, totalPages: 0 });
+    });
+
+    it('passes the query parameters through as a typed dto', async () => {
+      findAll.mockResolvedValue(page);
+
+      await request(server)
+        .get(`/${GLOBAL_PREFIX}/events?page=2&size=5&status=PUBLISHED&q=postgres`)
+        .expect(200);
+
+      const [received] = findAll.mock.calls[0] as [Record<string, unknown>];
+      expect(received.page).toBe(2);
+      expect(received.size).toBe(5);
+      expect(received.status).toBe('PUBLISHED');
+      expect(received.q).toBe('postgres');
+    });
+
+    it('applies the defaults when nothing is asked for', async () => {
+      findAll.mockResolvedValue(page);
+
+      await request(server).get(`/${GLOBAL_PREFIX}/events`).expect(200);
+
+      const [received] = findAll.mock.calls[0] as [Record<string, unknown>];
+      expect(received.page).toBe(1);
+      expect(received.size).toBe(20);
+    });
+
+    it.each([
+      ['a page below one', 'page=0'],
+      ['a negative page', 'page=-1'],
+      ['a size of zero', 'size=0'],
+      ['a non-numeric page', 'page=first'],
+      ['an unknown status', 'status=ARCHIVED'],
+      ['a from that is not a date', 'from=someday'],
+      ['an unknown query parameter', 'sortt=title'],
+    ])('rejects %s', async (_label, queryString) => {
+      await request(server).get(`/${GLOBAL_PREFIX}/events?${queryString}`).expect(400);
+
+      expect(findAll).not.toHaveBeenCalled();
     });
   });
 

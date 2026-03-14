@@ -1,34 +1,62 @@
 import { Injectable } from '@nestjs/common';
 
+import { PagedResponse } from '../common/dto/paged-response';
+import { clampPageSize, parseSort, SortOrder, toSkip } from '../common/dto/sort';
+
 import {
   ResourceNotFoundError,
   RuleViolationError,
   TransitionNotAllowedError,
   ValidationFailedError,
 } from '../common/errors/domain-error';
-import type { Event as PrismaEvent } from '../generated/prisma/client';
+import type { Event as PrismaEvent, Prisma } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateEventDto } from './dto/create-event.dto';
 import { EventResponseDto } from './dto/event-response.dto';
+import { ListEventsQueryDto } from './dto/list-events-query.dto';
 import { UpdateEventDto } from './dto/update-event.dto';
 import { toEventResponse } from './event.mapper';
 import { EventSchedule, validateSchedule } from './event-schedule';
 import { applyAction, canDelete, EventAction } from './event-status';
 
+/**
+ * The columns a client may sort by.
+ *
+ * Everything here is already visible in the response. That is the rule: a sort
+ * field is a read primitive, and one that is not in the response body lets a
+ * caller order by a hidden value and recover it by bisection.
+ */
+export const EVENT_SORT_FIELDS = ['startsAt', 'endsAt', 'title', 'capacity', 'createdAt'] as const;
+
+const DEFAULT_EVENT_SORT: SortOrder[] = [{ field: 'startsAt', direction: 'asc' }];
+
 @Injectable()
 export class EventsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async findAll(): Promise<EventResponseDto[]> {
-    const events = await this.prisma.event.findMany({
-      // Soonest first, then by id. The second key is not decoration: startsAt
-      // is not unique, and without a tiebreak PostgreSQL may return equal rows
-      // in any order it likes — which is invisible until this list is paged and
-      // a row starts appearing on two pages or none.
-      orderBy: [{ startsAt: 'asc' }, { id: 'asc' }],
-    });
+  async findAll(
+    query: ListEventsQueryDto = new ListEventsQueryDto(),
+  ): Promise<PagedResponse<EventResponseDto>> {
+    const size = clampPageSize(query.size);
+    const page = query.page;
 
-    return events.map(toEventResponse);
+    // Validated here rather than in a pipe, so the rule holds for every caller
+    // of the service and not merely for every caller that arrives over HTTP.
+    const orderBy = parseSort(query.sort, EVENT_SORT_FIELDS, DEFAULT_EVENT_SORT).map((order) => ({
+      [order.field]: order.direction,
+    }));
+
+    const where = buildWhere(query);
+
+    // One transaction, so the count and the page agree. Run separately, a write
+    // landing between them produces "showing 20 of 19", which is the kind of
+    // thing that gets reported as a rendering bug.
+    const [events, totalItems] = await this.prisma.$transaction([
+      this.prisma.event.findMany({ where, orderBy, skip: toSkip(page, size), take: size }),
+      this.prisma.event.count({ where }),
+    ]);
+
+    return PagedResponse.of(events.map(toEventResponse), page, size, totalItems);
   }
 
   async findOne(id: string): Promise<EventResponseDto> {
@@ -239,4 +267,43 @@ export class EventsService {
       throw new ValidationFailedError(violations);
     }
   }
+}
+
+/**
+ * Translates the query parameters into a Prisma filter.
+ *
+ * A free function rather than a method: it touches no state, and keeping it out
+ * of the class makes it obvious that adding a filter cannot accidentally reach
+ * for the database.
+ */
+function buildWhere(query: ListEventsQueryDto): Prisma.EventWhereInput {
+  const where: Prisma.EventWhereInput = {};
+
+  if (query.status !== undefined) {
+    where.status = query.status;
+  }
+
+  // Substring and case-insensitive: a venue filter people type by hand is worth
+  // very little if it demands the exact stored string.
+  if (query.venue !== undefined && query.venue !== '') {
+    where.venue = { contains: query.venue, mode: 'insensitive' };
+  }
+
+  if (query.from !== undefined || query.to !== undefined) {
+    where.startsAt = {
+      ...(query.from === undefined ? {} : { gte: query.from }),
+      ...(query.to === undefined ? {} : { lte: query.to }),
+    };
+  }
+
+  if (query.q !== undefined && query.q !== '') {
+    // OR inside the top-level object, so this is ANDed with every other filter:
+    // a search combined with a status must satisfy both.
+    where.OR = [
+      { title: { contains: query.q, mode: 'insensitive' } },
+      { description: { contains: query.q, mode: 'insensitive' } },
+    ];
+  }
+
+  return where;
 }

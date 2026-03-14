@@ -31,7 +31,7 @@ describe('EventsService against a real database', () => {
 
   describe('findAll', () => {
     it('returns nothing when there are no events', async () => {
-      await expect(service.findAll()).resolves.toEqual([]);
+      await expect(service.findAll()).resolves.toMatchObject({ items: [], totalItems: 0 });
     });
 
     it('returns the soonest event first', async () => {
@@ -48,7 +48,7 @@ describe('EventsService against a real database', () => {
         startsAt: new Date(Date.now() + 10 * DAY),
       });
 
-      const events = await service.findAll();
+      const { items: events } = await service.findAll();
 
       expect(events.map((event) => event.id)).toEqual([sooner.id, middle.id, later.id]);
     });
@@ -64,8 +64,8 @@ describe('EventsService against a real database', () => {
         createEvent({ startsAt }),
       ]);
 
-      const first = (await service.findAll()).map((event) => event.id);
-      const second = (await service.findAll()).map((event) => event.id);
+      const first = (await service.findAll()).items.map((event) => event.id);
+      const second = (await service.findAll()).items.map((event) => event.id);
 
       expect(first).toEqual(second);
       expect(first).toEqual([...first].sort());
@@ -78,7 +78,7 @@ describe('EventsService against a real database', () => {
       await createEvent({ status: 'PUBLISHED' });
       await createEvent({ status: 'CANCELLED' });
 
-      const statuses = (await service.findAll()).map((event) => event.status).sort();
+      const statuses = (await service.findAll()).items.map((event) => event.status).sort();
 
       expect(statuses).toEqual(['CANCELLED', 'DRAFT', 'PUBLISHED']);
     });
