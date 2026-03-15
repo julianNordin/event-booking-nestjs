@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 
+import { AttendeesModule } from './attendees/attendees.module';
 import { appConfig } from './config/app.config';
 import { databaseConfig } from './config/database.config';
 import { validateEnv } from './config/env.validation';
@@ -21,6 +22,7 @@ import { PrismaModule } from './prisma/prisma.module';
     }),
     PrismaModule,
     EventsModule,
+    AttendeesModule,
   ],
   controllers: [],
   providers: [],
