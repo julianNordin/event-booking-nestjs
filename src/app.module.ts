@@ -8,6 +8,7 @@ import { databaseConfig } from './config/database.config';
 import { validateEnv } from './config/env.validation';
 import { EventsModule } from './events/events.module';
 import { PrismaModule } from './prisma/prisma.module';
+import { RegistrationsModule } from './registrations/registrations.module';
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { PrismaModule } from './prisma/prisma.module';
     PrismaModule,
     EventsModule,
     AttendeesModule,
+    RegistrationsModule,
   ],
   controllers: [],
   providers: [],
