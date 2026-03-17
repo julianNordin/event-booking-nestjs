@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 
 import { AttendeesModule } from './attendees/attendees.module';
+import { ClockModule } from './common/clock/clock.module';
 import { appConfig } from './config/app.config';
 import { databaseConfig } from './config/database.config';
 import { validateEnv } from './config/env.validation';
@@ -20,6 +21,7 @@ import { PrismaModule } from './prisma/prisma.module';
       load: [appConfig, databaseConfig],
       validate: validateEnv,
     }),
+    ClockModule,
     PrismaModule,
     EventsModule,
     AttendeesModule,
