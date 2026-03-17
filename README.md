@@ -58,7 +58,7 @@ are not testable against a mock.
 - [x] 08 — Problem Details & Prisma error mapping
 - [x] 09 — Paging, sorting, filtering, search
 - [x] 10 — Attendees
-- [ ] 11 — Registration: rules engine & happy path
+- [x] 11 — Registration: rules engine & happy path
 - [ ] 12 — Capacity under concurrency
 - [ ] 13 — Waitlist & promotion
 - [ ] 14 — Query performance: measure, then fix
