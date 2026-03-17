@@ -1,7 +1,12 @@
 import { Injectable } from '@nestjs/common';
 
 import { Clock } from '../common/clock/clock.service';
-import { ResourceNotFoundError, RuleViolationError } from '../common/errors/domain-error';
+import {
+  ResourceNotFoundError,
+  RuleViolationError,
+  TransitionNotAllowedError,
+} from '../common/errors/domain-error';
+import type { Registration as PrismaRegistration } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateRegistrationDto } from './dto/create-registration.dto';
 import { RegistrationResponseDto } from './dto/registration-response.dto';
@@ -65,6 +70,88 @@ export class RegistrationsService {
     });
 
     return toRegistrationResponse(registration);
+  }
+
+  /**
+   * Everyone attached to an event, in the order a door list wants them:
+   * confirmed seats first, then the queue in position order, then the people
+   * who cancelled.
+   *
+   * That ordering is free — the RegistrationStatus enum is declared
+   * CONFIRMED, WAITLISTED, CANCELLED, and PostgreSQL sorts an enum by its
+   * declared order rather than alphabetically, which would have given
+   * CANCELLED, CONFIRMED, WAITLISTED.
+   */
+  async findForEvent(eventId: string): Promise<RegistrationResponseDto[]> {
+    const event = await this.prisma.event.findUnique({
+      where: { id: eventId },
+      select: { id: true },
+    });
+
+    if (event === null) {
+      throw new ResourceNotFoundError('event', eventId);
+    }
+
+    const registrations = await this.prisma.registration.findMany({
+      where: { eventId },
+      orderBy: [
+        { status: 'asc' },
+        { waitlistPosition: { sort: 'asc', nulls: 'last' } },
+        { registeredAt: 'asc' },
+        { id: 'asc' },
+      ],
+    });
+
+    return registrations.map(toRegistrationResponse);
+  }
+
+  async findOne(id: string): Promise<RegistrationResponseDto> {
+    return toRegistrationResponse(await this.requireRegistration(id));
+  }
+
+  /**
+   * Give up a seat or a place in the queue.
+   *
+   * The row is kept and marked CANCELLED rather than deleted: it is the record
+   * that this person did once hold a place, and the partial unique index is
+   * written to ignore cancelled rows precisely so they can register again.
+   *
+   * Promoting whoever is next off the waitlist belongs here too, and does not
+   * happen yet — that lands in the waitlist phase, inside this transaction.
+   */
+  async cancel(id: string): Promise<RegistrationResponseDto> {
+    const registration = await this.requireRegistration(id);
+
+    if (registration.status === 'CANCELLED') {
+      throw new TransitionNotAllowedError(
+        'this registration has already been cancelled',
+        registration.status,
+        'cancel',
+      );
+    }
+
+    const cancelled = await this.prisma.registration.update({
+      where: { id },
+      data: {
+        status: 'CANCELLED',
+        cancelledAt: this.clock.now(),
+        // Vacating the position as well as the status. Leaving it behind means
+        // a cancelled row still claims a place in a queue it has left.
+        waitlistPosition: null,
+      },
+    });
+
+    return toRegistrationResponse(cancelled);
+  }
+
+  private async requireRegistration(id: string): Promise<PrismaRegistration> {
+    const registration = await this.prisma.registration.findUnique({ where: { id } });
+
+    if (registration === null) {
+      throw new ResourceNotFoundError('registration', id);
+    }
+
+    return registration;
   }
 
   /**

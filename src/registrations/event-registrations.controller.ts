@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Get,
   HttpCode,
   HttpStatus,
   Param,
@@ -40,5 +41,12 @@ export class EventRegistrationsController {
     response.setHeader('Location', `/${GLOBAL_PREFIX}/registrations/${registration.id}`);
 
     return registration;
+  }
+
+  @Get()
+  findAll(
+    @Param('eventId', new ParseUUIDPipe({ version: '7' })) eventId: string,
+  ): Promise<RegistrationResponseDto[]> {
+    return this.registrations.findForEvent(eventId);
   }
 }

@@ -1,7 +1,11 @@
 import { Test } from '@nestjs/testing';
 
 import { Clock } from '../common/clock/clock.service';
-import { ResourceNotFoundError, RuleViolationError } from '../common/errors/domain-error';
+import {
+  ResourceNotFoundError,
+  RuleViolationError,
+  TransitionNotAllowedError,
+} from '../common/errors/domain-error';
 import type { Event, Registration } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { RegistrationsService } from './registrations.service';
@@ -51,6 +55,10 @@ describe('RegistrationsService', () => {
   const count = jest.fn();
   const create = jest.fn();
   const aggregate = jest.fn();
+  const findRegistration = jest.fn();
+  const findMany = jest.fn();
+  const update = jest.fn();
+  const deleteRegistration = jest.fn();
   let service: RegistrationsService;
 
   beforeEach(async () => {
@@ -59,6 +67,10 @@ describe('RegistrationsService', () => {
     count.mockReset();
     create.mockReset();
     aggregate.mockReset();
+    findRegistration.mockReset();
+    findMany.mockReset();
+    update.mockReset();
+    deleteRegistration.mockReset();
 
     aggregate.mockResolvedValue({ _max: { waitlistPosition: null } });
     create.mockImplementation(({ data }: { data: Partial<Registration> }) =>
@@ -73,7 +85,15 @@ describe('RegistrationsService', () => {
           useValue: {
             event: { findUnique: findEvent },
             attendee: { findUnique: findAttendee },
-            registration: { count, create, aggregate },
+            registration: {
+              count,
+              create,
+              aggregate,
+              findUnique: findRegistration,
+              findMany,
+              update,
+              delete: deleteRegistration,
+            },
           },
         },
         // Time as an ordinary argument. Every rule below is a comparison
@@ -270,6 +290,128 @@ describe('RegistrationsService', () => {
       await expect(service.register(EVENT_ID, { attendeeId: ATTENDEE_ID })).rejects.toBeInstanceOf(
         RuleViolationError,
       );
+    });
+  });
+
+  describe('findForEvent', () => {
+    it('raises not-found when the event does not exist', async () => {
+      findEvent.mockResolvedValue(null);
+
+      await expect(service.findForEvent(EVENT_ID)).rejects.toBeInstanceOf(ResourceNotFoundError);
+      expect(findMany).not.toHaveBeenCalled();
+    });
+
+    it('orders confirmed first, then the queue by position, then cancelled', async () => {
+      // The enum is declared CONFIRMED, WAITLISTED, CANCELLED and PostgreSQL
+      // sorts an enum by its declared order, so this ordering comes free.
+      // Alphabetical would have put CANCELLED at the top of the door list.
+      findEvent.mockResolvedValue({ id: EVENT_ID });
+      findMany.mockResolvedValue([]);
+
+      await service.findForEvent(EVENT_ID);
+
+      expect(findMany).toHaveBeenCalledWith({
+        where: { eventId: EVENT_ID },
+        orderBy: [
+          { status: 'asc' },
+          { waitlistPosition: { sort: 'asc', nulls: 'last' } },
+          { registeredAt: 'asc' },
+          { id: 'asc' },
+        ],
+      });
+    });
+
+    it('maps them to response DTOs', async () => {
+      findEvent.mockResolvedValue({ id: EVENT_ID });
+      findMany.mockResolvedValue([aRegistration({ status: 'WAITLISTED', waitlistPosition: 2 })]);
+
+      const [registration] = await service.findForEvent(EVENT_ID);
+
+      expect(registration).toMatchObject({ status: 'WAITLISTED', waitlistPosition: 2 });
+      expect(typeof registration?.registeredAt).toBe('string');
+    });
+
+    it('returns an empty list for an event nobody has registered for', async () => {
+      findEvent.mockResolvedValue({ id: EVENT_ID });
+      findMany.mockResolvedValue([]);
+
+      await expect(service.findForEvent(EVENT_ID)).resolves.toEqual([]);
+    });
+  });
+
+  describe('cancel', () => {
+    it('raises not-found for a registration that does not exist', async () => {
+      findRegistration.mockResolvedValue(null);
+
+      await expect(service.cancel('missing')).rejects.toBeInstanceOf(ResourceNotFoundError);
+      expect(update).not.toHaveBeenCalled();
+    });
+
+    it('marks it cancelled and stamps the injected clock', async () => {
+      findRegistration.mockResolvedValue(aRegistration({ status: 'CONFIRMED' }));
+      update.mockResolvedValue(aRegistration({ status: 'CANCELLED', cancelledAt: NOW }));
+
+      await service.cancel('r1');
+
+      expect(update).toHaveBeenCalledWith({
+        where: { id: 'r1' },
+        data: { status: 'CANCELLED', cancelledAt: NOW, waitlistPosition: null },
+      });
+    });
+
+    it('vacates the waitlist position as well as the status', async () => {
+      // A cancelled row that keeps its position still claims a place in a queue
+      // it has left, and the next promotion would skip over it.
+      findRegistration.mockResolvedValue(
+        aRegistration({ status: 'WAITLISTED', waitlistPosition: 3 }),
+      );
+      update.mockResolvedValue(aRegistration({ status: 'CANCELLED' }));
+
+      await service.cancel('r1');
+
+      const calls = update.mock.calls as [{ data: { waitlistPosition: number | null } }][];
+      expect(calls[0]?.[0].data.waitlistPosition).toBeNull();
+    });
+
+    it('keeps the row rather than deleting it', async () => {
+      // It is the record that this person held a place, and the partial unique
+      // index ignores cancelled rows precisely so they can register again.
+      findRegistration.mockResolvedValue(aRegistration({ status: 'CONFIRMED' }));
+      update.mockResolvedValue(aRegistration({ status: 'CANCELLED' }));
+
+      await service.cancel('r1');
+
+      expect(deleteRegistration).not.toHaveBeenCalled();
+    });
+
+    it('refuses to cancel the same registration twice', async () => {
+      findRegistration.mockResolvedValue(aRegistration({ status: 'CANCELLED' }));
+
+      await expect(service.cancel('r1')).rejects.toBeInstanceOf(TransitionNotAllowedError);
+      expect(update).not.toHaveBeenCalled();
+    });
+
+    it('cancels a waitlisted place as readily as a confirmed one', async () => {
+      findRegistration.mockResolvedValue(
+        aRegistration({ status: 'WAITLISTED', waitlistPosition: 1 }),
+      );
+      update.mockResolvedValue(aRegistration({ status: 'CANCELLED' }));
+
+      await expect(service.cancel('r1')).resolves.toMatchObject({ status: 'CANCELLED' });
+    });
+  });
+
+  describe('findOne', () => {
+    it('returns the registration', async () => {
+      findRegistration.mockResolvedValue(aRegistration());
+
+      await expect(service.findOne('r1')).resolves.toMatchObject({ status: 'CONFIRMED' });
+    });
+
+    it('raises not-found rather than returning null', async () => {
+      findRegistration.mockResolvedValue(null);
+
+      await expect(service.findOne('r1')).rejects.toBeInstanceOf(ResourceNotFoundError);
     });
   });
 });
