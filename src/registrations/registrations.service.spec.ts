@@ -59,6 +59,24 @@ describe('RegistrationsService', () => {
   const findMany = jest.fn();
   const update = jest.fn();
   const deleteRegistration = jest.fn();
+  const lockEvent = jest.fn();
+  const findEventOrThrow = jest.fn();
+
+  // $transaction(fn) hands the callback a client scoped to the transaction.
+  // Running it immediately against a stand-in lets these tests assert what
+  // happened *inside* the transaction — including that the row lock was taken
+  // before anything was counted.
+  const $transaction = jest.fn(
+    async (
+      run: (tx: unknown) => Promise<unknown>,
+      _options?: { maxWait: number; timeout: number },
+    ) =>
+      run({
+        $queryRaw: lockEvent,
+        event: { findUniqueOrThrow: findEventOrThrow },
+        registration: { count, create, aggregate },
+      }),
+  );
   let service: RegistrationsService;
 
   beforeEach(async () => {
@@ -71,6 +89,9 @@ describe('RegistrationsService', () => {
     findMany.mockReset();
     update.mockReset();
     deleteRegistration.mockReset();
+    lockEvent.mockReset();
+    findEventOrThrow.mockReset();
+    $transaction.mockClear();
 
     aggregate.mockResolvedValue({ _max: { waitlistPosition: null } });
     create.mockImplementation(({ data }: { data: Partial<Registration> }) =>
@@ -94,6 +115,7 @@ describe('RegistrationsService', () => {
               update,
               delete: deleteRegistration,
             },
+            $transaction,
           },
         },
         // Time as an ordinary argument. Every rule below is a comparison
@@ -121,6 +143,17 @@ describe('RegistrationsService', () => {
     throw new Error('expected the service to refuse this registration');
   }
 
+  /**
+   * The event, as both code paths see it: the row lock inside the transaction
+   * returns it (or nothing, when it does not exist), and the plain lookup used
+   * by the read paths returns the same thing.
+   */
+  function givenEvent(event: Partial<Event> | null): void {
+    lockEvent.mockResolvedValue(event === null ? [] : [{ id: event.id ?? EVENT_ID }]);
+    findEventOrThrow.mockResolvedValue(event);
+    findEvent.mockResolvedValue(event);
+  }
+
   function written(): Partial<Registration> {
     const calls = create.mock.calls as [{ data: Partial<Registration> }][];
     const first = calls[0];
@@ -130,7 +163,7 @@ describe('RegistrationsService', () => {
 
   describe('the things that must exist', () => {
     it('raises not-found when the event does not exist', async () => {
-      findEvent.mockResolvedValue(null);
+      givenEvent(null);
 
       await expect(service.register(EVENT_ID, { attendeeId: ATTENDEE_ID })).rejects.toBeInstanceOf(
         ResourceNotFoundError,
@@ -142,7 +175,7 @@ describe('RegistrationsService', () => {
       // Checked explicitly rather than left to the foreign key: the constraint
       // would refuse too, but as a 409 about a relationship, where a person who
       // does not exist is a 404 about the person.
-      findEvent.mockResolvedValue(anEvent());
+      givenEvent(anEvent());
       findAttendee.mockResolvedValue(null);
 
       const error = await service
@@ -156,7 +189,7 @@ describe('RegistrationsService', () => {
 
   describe('a confirmed seat', () => {
     beforeEach(() => {
-      findEvent.mockResolvedValue(anEvent({ capacity: 10 }));
+      givenEvent(anEvent({ capacity: 10 }));
       findAttendee.mockResolvedValue({ id: ATTENDEE_ID });
       count.mockResolvedValue(3);
     });
@@ -190,7 +223,7 @@ describe('RegistrationsService', () => {
 
   describe('a full event', () => {
     beforeEach(() => {
-      findEvent.mockResolvedValue(anEvent({ capacity: 2, waitlistEnabled: true }));
+      givenEvent(anEvent({ capacity: 2, waitlistEnabled: true }));
       findAttendee.mockResolvedValue({ id: ATTENDEE_ID });
       count.mockResolvedValue(2);
     });
@@ -215,7 +248,7 @@ describe('RegistrationsService', () => {
     });
 
     it('refuses outright when the waitlist is disabled', async () => {
-      findEvent.mockResolvedValue(anEvent({ capacity: 2, waitlistEnabled: false }));
+      givenEvent(anEvent({ capacity: 2, waitlistEnabled: false }));
 
       const error = await captureRuleViolation(() =>
         service.register(EVENT_ID, { attendeeId: ATTENDEE_ID }),
@@ -252,7 +285,7 @@ describe('RegistrationsService', () => {
         'event-already-started',
       ],
     ])('refuses %s as %s', async (_label, overrides, rule) => {
-      findEvent.mockResolvedValue(anEvent(overrides));
+      givenEvent(anEvent(overrides));
 
       const error = await captureRuleViolation(() =>
         service.register(EVENT_ID, { attendeeId: ATTENDEE_ID }),
@@ -265,7 +298,7 @@ describe('RegistrationsService', () => {
     });
 
     it('names the event and the attendee in the problem extensions', async () => {
-      findEvent.mockResolvedValue(anEvent({ status: 'CANCELLED' }));
+      givenEvent(anEvent({ status: 'CANCELLED' }));
 
       const error = await captureRuleViolation(() =>
         service.register(EVENT_ID, { attendeeId: ATTENDEE_ID }),
@@ -283,7 +316,7 @@ describe('RegistrationsService', () => {
     it('is the injected one, not the wall clock', async () => {
       // The event starts a day before the frozen "now", so this is only refused
       // if the service is reading the clock it was given.
-      findEvent.mockResolvedValue(anEvent({ startsAt: new Date(NOW.getTime() - DAY) }));
+      givenEvent(anEvent({ startsAt: new Date(NOW.getTime() - DAY) }));
       findAttendee.mockResolvedValue({ id: ATTENDEE_ID });
       count.mockResolvedValue(0);
 
@@ -295,7 +328,7 @@ describe('RegistrationsService', () => {
 
   describe('findForEvent', () => {
     it('raises not-found when the event does not exist', async () => {
-      findEvent.mockResolvedValue(null);
+      givenEvent(null);
 
       await expect(service.findForEvent(EVENT_ID)).rejects.toBeInstanceOf(ResourceNotFoundError);
       expect(findMany).not.toHaveBeenCalled();
@@ -305,7 +338,7 @@ describe('RegistrationsService', () => {
       // The enum is declared CONFIRMED, WAITLISTED, CANCELLED and PostgreSQL
       // sorts an enum by its declared order, so this ordering comes free.
       // Alphabetical would have put CANCELLED at the top of the door list.
-      findEvent.mockResolvedValue({ id: EVENT_ID });
+      givenEvent({ id: EVENT_ID });
       findMany.mockResolvedValue([]);
 
       await service.findForEvent(EVENT_ID);
@@ -322,7 +355,7 @@ describe('RegistrationsService', () => {
     });
 
     it('maps them to response DTOs', async () => {
-      findEvent.mockResolvedValue({ id: EVENT_ID });
+      givenEvent({ id: EVENT_ID });
       findMany.mockResolvedValue([aRegistration({ status: 'WAITLISTED', waitlistPosition: 2 })]);
 
       const [registration] = await service.findForEvent(EVENT_ID);
@@ -332,7 +365,7 @@ describe('RegistrationsService', () => {
     });
 
     it('returns an empty list for an event nobody has registered for', async () => {
-      findEvent.mockResolvedValue({ id: EVENT_ID });
+      givenEvent({ id: EVENT_ID });
       findMany.mockResolvedValue([]);
 
       await expect(service.findForEvent(EVENT_ID)).resolves.toEqual([]);
@@ -412,6 +445,105 @@ describe('RegistrationsService', () => {
       findRegistration.mockResolvedValue(null);
 
       await expect(service.findOne('r1')).rejects.toBeInstanceOf(ResourceNotFoundError);
+    });
+  });
+
+  describe('the row lock', () => {
+    beforeEach(() => {
+      givenEvent(anEvent({ capacity: 10 }));
+      findAttendee.mockResolvedValue({ id: ATTENDEE_ID });
+      count.mockResolvedValue(0);
+    });
+
+    /** The SQL the service actually sent, reassembled from the tagged template. */
+    function lockSql(): string {
+      const calls = lockEvent.mock.calls as [TemplateStringsArray][];
+      const first = calls[0];
+      if (first === undefined) throw new Error('expected the event row to be locked');
+      return first[0].join('?').replace(/\s+/g, ' ').trim();
+    }
+
+    it('is taken before anything is counted', async () => {
+      // The entire fix, as an ordering assertion. Counting first and locking
+      // afterwards reads a number that was already stale, and the lock then
+      // protects nothing at all.
+      await service.register(EVENT_ID, { attendeeId: ATTENDEE_ID });
+
+      const lockedAt = lockEvent.mock.invocationCallOrder[0];
+      const countedAt = count.mock.invocationCallOrder[0];
+
+      expect(lockedAt).toBeDefined();
+      expect(countedAt).toBeDefined();
+      expect(lockedAt).toBeLessThan(countedAt ?? 0);
+    });
+
+    it('is a FOR UPDATE on one event row, not on the table', async () => {
+      // Locking more than the contended row would serialise registrations for
+      // every event in the system against each other.
+      await service.register(EVENT_ID, { attendeeId: ATTENDEE_ID });
+
+      expect(lockSql()).toMatch(/SELECT id FROM events WHERE id = \?::uuid FOR UPDATE/i);
+    });
+
+    it('parameterises the event id rather than interpolating it', async () => {
+      // A tagged template sends the value as a bind parameter. Building this
+      // string by concatenation would put a path segment straight into SQL.
+      await service.register(EVENT_ID, { attendeeId: ATTENDEE_ID });
+
+      expect(lockSql()).not.toContain(EVENT_ID);
+      expect(lockEvent).toHaveBeenCalledWith(expect.anything(), EVENT_ID);
+    });
+
+    it('runs the decision and the insert in one transaction', async () => {
+      await service.register(EVENT_ID, { attendeeId: ATTENDEE_ID });
+
+      expect($transaction).toHaveBeenCalledTimes(1);
+    });
+
+    it('states its own timeouts rather than taking Prisma’s defaults', async () => {
+      // With a queue of contenders behind one lock, the last in line waits for
+      // everyone ahead. Prisma's 2s/5s defaults would start refusing people for
+      // a reason that has nothing to do with capacity.
+      await service.register(EVENT_ID, { attendeeId: ATTENDEE_ID });
+
+      expect($transaction.mock.calls[0]?.[1]).toEqual({ maxWait: 5_000, timeout: 10_000 });
+    });
+
+    it('raises not-found when the lock matches no event', async () => {
+      // The existence check moved inside the transaction with the lock, so a
+      // deleted event is caught by the same query that serialises the rest.
+      givenEvent(null);
+
+      await expect(service.register(EVENT_ID, { attendeeId: ATTENDEE_ID })).rejects.toBeInstanceOf(
+        ResourceNotFoundError,
+      );
+      expect(count).not.toHaveBeenCalled();
+    });
+
+    it('checks the attendee outside the transaction, keeping the lock short', async () => {
+      // Whether this person exists has nothing to do with the capacity race,
+      // and doing it inside would hold the event row while finding out.
+      findAttendee.mockResolvedValue(null);
+
+      await expect(service.register(EVENT_ID, { attendeeId: ATTENDEE_ID })).rejects.toBeInstanceOf(
+        ResourceNotFoundError,
+      );
+      expect($transaction).not.toHaveBeenCalled();
+    });
+
+    it('reads the waitlist position inside the transaction too', async () => {
+      // Read outside the lock, two registrations would see the same maximum
+      // and be handed the same position — the capacity race one layer along.
+      givenEvent(anEvent({ capacity: 1, waitlistEnabled: true }));
+      count.mockResolvedValue(1);
+      aggregate.mockResolvedValue({ _max: { waitlistPosition: 2 } });
+
+      await service.register(EVENT_ID, { attendeeId: ATTENDEE_ID });
+
+      const aggregatedAt = aggregate.mock.invocationCallOrder[0] ?? 0;
+      const lockedAt = lockEvent.mock.invocationCallOrder[0] ?? 0;
+      expect(aggregatedAt).toBeGreaterThan(lockedAt);
+      expect(written()).toMatchObject({ waitlistPosition: 3 });
     });
   });
 });
