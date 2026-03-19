@@ -25,7 +25,8 @@
     "seed": "prisma db seed",
     "test:int": "jest --selectProjects int --runInBand --passWithNoTests",
     "pretest:int": "prisma generate",
-    "test": "jest --runInBand"
+    "test": "jest --runInBand",
+    "check:overbook": "ts-node --project tsconfig.test.json scripts/overbook-check.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",

@@ -32,14 +32,15 @@ Swagger UI at `/docs`, the raw spec at `/docs-json`, health at `/health`.
 
 ## Commands
 
-| Command                | What it does                                                             |
-| ---------------------- | ------------------------------------------------------------------------ |
-| `npm run lint`         | ESLint, type-aware, reports without rewriting                            |
-| `npm run format:check` | Prettier, verifies formatting and LF endings                             |
-| `npm run typecheck`    | `tsc --noEmit` over sources and tests                                    |
-| `npm run test:unit`    | Fast tier. Pure rules, state machine and mocked services. **No Docker.** |
-| `npm run test:int`     | Slow tier. Real PostgreSQL via Testcontainers. **Docker required.**      |
-| `npm run build`        | `nest build`                                                             |
+| Command                  | What it does                                                              |
+| ------------------------ | ------------------------------------------------------------------------- |
+| `npm run lint`           | ESLint, type-aware, reports without rewriting                             |
+| `npm run format:check`   | Prettier, verifies formatting and LF endings                              |
+| `npm run typecheck`      | `tsc --noEmit` over sources and tests                                     |
+| `npm run test:unit`      | Fast tier. Pure rules, state machine and mocked services. **No Docker.**  |
+| `npm run test:int`       | Slow tier. Real PostgreSQL via Testcontainers. **Docker required.**       |
+| `npm run build`          | `nest build`                                                              |
+| `npm run check:overbook` | Fires 20 simultaneous registrations at a 1-seat event on a running server |
 
 The two test tiers are separate on purpose. Everything that is a claim about _rules_ is settled in
 the fast tier with no database at all; everything that is a claim about _SQL_ — constraints,
