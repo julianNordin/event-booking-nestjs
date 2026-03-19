@@ -46,6 +46,80 @@ the fast tier with no database at all; everything that is a claim about _SQL_ �
 isolation, locking — is settled in the slow tier against a real PostgreSQL, because those claims
 are not testable against a mock.
 
+## Why a row lock
+
+Capacity is the substance of this project, so the reasoning is written down rather than left in a
+commit message.
+
+### The race
+
+Registering used to count the confirmed registrations, decide there was room, and insert. That is a
+check-then-act on shared state. Under PostgreSQL's default `READ COMMITTED`, every concurrent
+transaction sees the same count, every one finds room, and every one inserts.
+
+Measured against this schema, not reasoned about:
+
+| Implementation                      | 20 simultaneous requests, **1 seat** |
+| ----------------------------------- | ------------------------------------ |
+| count, then insert                  | **20 confirmed**                     |
+| same, wrapped in a transaction      | **10 confirmed**                     |
+| transaction + `SELECT … FOR UPDATE` | **1 confirmed**                      |
+
+The middle row is the interesting one. Wrapping the check-then-act in a transaction fixes nothing —
+`READ COMMITTED` is not `SERIALIZABLE`, and a transaction is not a mutex. Ten is simply the
+connection pool size, which is how much concurrency actually reached the database. It is easy to
+assume the transaction is what makes this correct; it is not, and the number says so.
+
+### What the fix is
+
+```sql
+SELECT id FROM events WHERE id = $1 FOR UPDATE
+```
+
+taken inside the transaction and **before** the count. Every registration for that event queues
+behind the one in front of it. Because the lock is on the event row, it serialises exactly the thing
+that must be serialised and nothing else — a rush on one event does not delay another, and there is
+a test that asserts it.
+
+Prisma's client API cannot express this, so it is `$queryRaw` with the id as a bind parameter.
+
+### Why not a denormalised counter
+
+A `confirmed_count` column on `events`, incremented atomically, would also work — `UPDATE … SET
+confirmed_count = confirmed_count + 1 WHERE id = $1 AND confirmed_count < capacity` takes a row lock
+implicitly and is one statement.
+
+It was rejected because it creates two sources of truth for the same fact. The counter and the rows
+in `registrations` must agree forever, across every path that ever touches a registration: the
+cancel endpoint, the waitlist promotion, the event-cancelled cascade, a future bulk import, a
+support engineer fixing a row by hand. Every one of them has to remember. When they drift — and they
+do — the drift is **silent**: the API reports a full event that has empty seats, or overbooks one
+that looks full, and nothing anywhere raises an error. Recomputing from the rows, which is what this
+service does, cannot drift because there is nothing to drift from.
+
+The counter is the right answer when the count itself is too expensive to compute. Here it is an
+index scan on `(event_id, status)`.
+
+### Why not SERIALIZABLE with a retry loop
+
+`SET TRANSACTION ISOLATION LEVEL SERIALIZABLE` makes the original count-then-insert correct: the
+database detects the conflict and aborts one of the transactions with SQLSTATE `40001`.
+
+It was rejected on operational grounds rather than correctness. Under contention — which is exactly
+when this path matters — serialisation failures do not stay rare. Twenty people racing for one seat
+produce nineteen aborts, and every one has to be retried by application code that must distinguish
+`40001` from real failures, bound its attempts, and back off. That retry loop is more moving parts
+than the lock, it turns a queue into a thundering herd, and its failure mode under load is a storm
+of retries competing with the traffic that caused them.
+
+`FOR UPDATE` makes contenders wait instead of fail. Waiting is the behaviour a queue for one seat
+should have.
+
+### Why not an application-level mutex
+
+It would work on one process and silently stop working on two. The lock has to live where the shared
+state lives.
+
 ## Roadmap
 
 - [x] 01 — Scaffold & tooling
