@@ -24,4 +24,16 @@ export class EventResponseDto {
   status!: EventStatus;
   createdAt!: string;
   updatedAt!: string;
+
+  /** How many people currently hold a seat. */
+  confirmedCount!: number;
+
+  /** How many are waiting for one. */
+  waitlistCount!: number;
+
+  /**
+   * Seats still to be had. Never negative: an overbooked event has none, it
+   * does not have minus two.
+   */
+  availableSeats!: number;
 }

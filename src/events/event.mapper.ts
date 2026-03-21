@@ -1,6 +1,12 @@
 import type { Event } from '../generated/prisma/client';
 import { EventResponseDto } from './dto/event-response.dto';
 
+/** How many registrations an event holds, by the two states that occupy a place. */
+export interface EventCounts {
+  confirmed: number;
+  waitlisted: number;
+}
+
 /**
  * The single place a database row becomes a response body.
  *
@@ -8,7 +14,7 @@ import { EventResponseDto } from './dto/event-response.dto';
  * column added to the table has to be added here before a client can see it,
  * so a migration cannot widen the public API by accident.
  */
-export function toEventResponse(event: Event): EventResponseDto {
+export function toEventResponse(event: Event, counts: EventCounts): EventResponseDto {
   return {
     id: event.id,
     title: event.title,
@@ -23,5 +29,8 @@ export function toEventResponse(event: Event): EventResponseDto {
     status: event.status,
     createdAt: event.createdAt.toISOString(),
     updatedAt: event.updatedAt.toISOString(),
+    confirmedCount: counts.confirmed,
+    waitlistCount: counts.waitlisted,
+    availableSeats: Math.max(event.capacity - counts.confirmed, 0),
   };
 }

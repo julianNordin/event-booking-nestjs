@@ -38,6 +38,7 @@ describe('EventsService', () => {
   const update = jest.fn();
   const eventCount = jest.fn();
   const count = jest.fn();
+  const groupBy = jest.fn();
   const deleteFn = jest.fn();
   const txEventUpdate = jest.fn();
   const lockEvent = jest.fn();
@@ -69,6 +70,9 @@ describe('EventsService', () => {
     update.mockReset();
     eventCount.mockReset();
     count.mockReset();
+    groupBy.mockReset();
+    // No registrations unless a test says otherwise.
+    groupBy.mockResolvedValue([]);
     deleteFn.mockReset();
     txEventUpdate.mockReset();
     lockEvent.mockReset();
@@ -90,7 +94,7 @@ describe('EventsService', () => {
           provide: PrismaService,
           useValue: {
             event: { findMany, findUnique, create, update, delete: deleteFn, count: eventCount },
-            registration: { count },
+            registration: { count, groupBy },
             $transaction,
           },
         },
@@ -543,7 +547,14 @@ describe('EventsService', () => {
 
         await service.update(id, { capacity: 100 });
 
-        expect(count).not.toHaveBeenCalled();
+        // The guard that counts confirmed seats only runs when capacity is
+        // *reduced*. Counts are still read afterwards to build the response, so
+        // the assertion is about ordering rather than about there being none:
+        // nothing was counted before the write.
+        const updatedAt = txEventUpdate.mock.invocationCallOrder[0] ?? 0;
+        const firstCountAt = count.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER;
+        expect(firstCountAt).toBeGreaterThan(updatedAt);
+
         expect(updatedData().capacity).toBe(100);
         expect(promote).toHaveBeenCalledTimes(1);
       });

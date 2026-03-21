@@ -17,9 +17,11 @@ const row: Event = {
   updatedAt: new Date('2027-01-16T11:30:00.000Z'),
 };
 
+const counts = { confirmed: 12, waitlisted: 3 };
+
 describe('toEventResponse', () => {
   it('renders every timestamp as an ISO-8601 string', () => {
-    const dto = toEventResponse(row);
+    const dto = toEventResponse(row, counts);
 
     expect(dto.startsAt).toBe('2027-03-29T09:00:00.000Z');
     expect(dto.endsAt).toBe('2027-03-29T17:00:00.000Z');
@@ -32,18 +34,17 @@ describe('toEventResponse', () => {
   it('keeps optional timestamps as null rather than undefined', () => {
     // undefined disappears from JSON entirely, so a client cannot tell an
     // absent field from a field the server forgot. null is a stated answer.
-    const dto = toEventResponse({
-      ...row,
-      registrationOpensAt: null,
-      registrationClosesAt: null,
-    });
+    const dto = toEventResponse(
+      { ...row, registrationOpensAt: null, registrationClosesAt: null },
+      counts,
+    );
 
     expect(dto.registrationOpensAt).toBeNull();
     expect(dto.registrationClosesAt).toBeNull();
   });
 
   it('copies the scalar fields through unchanged', () => {
-    const dto = toEventResponse(row);
+    const dto = toEventResponse(row, counts);
 
     expect(dto).toMatchObject({
       id: row.id,
@@ -60,14 +61,19 @@ describe('toEventResponse', () => {
     // The assertion that stops a migration widening the public API. A column
     // added to the table cannot reach a client until it is added here too, and
     // this test is what makes that a deliberate act rather than an accident.
-    const dto = toEventResponse({
-      ...row,
-      // A column that exists in the database but has no business being public.
-      internalNote: 'do not ship this',
-    } as Event & { internalNote: string });
+    const dto = toEventResponse(
+      {
+        ...row,
+        // A column that exists in the database but has no business being public.
+        internalNote: 'do not ship this',
+      } as Event & { internalNote: string },
+      counts,
+    );
 
     expect(Object.keys(dto).sort()).toEqual([
+      'availableSeats',
       'capacity',
+      'confirmedCount',
       'createdAt',
       'description',
       'endsAt',
@@ -79,6 +85,7 @@ describe('toEventResponse', () => {
       'title',
       'updatedAt',
       'venue',
+      'waitlistCount',
       'waitlistEnabled',
     ]);
   });

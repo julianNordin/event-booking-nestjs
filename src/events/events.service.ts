@@ -16,7 +16,7 @@ import { CreateEventDto } from './dto/create-event.dto';
 import { EventResponseDto } from './dto/event-response.dto';
 import { ListEventsQueryDto } from './dto/list-events-query.dto';
 import { UpdateEventDto } from './dto/update-event.dto';
-import { toEventResponse } from './event.mapper';
+import { EventCounts, toEventResponse } from './event.mapper';
 import { EventSchedule, validateSchedule } from './event-schedule';
 import { applyAction, canDelete, EventAction } from './event-status';
 
@@ -30,6 +30,9 @@ import { applyAction, canDelete, EventAction } from './event-status';
 export const EVENT_SORT_FIELDS = ['startsAt', 'endsAt', 'title', 'capacity', 'createdAt'] as const;
 
 const DEFAULT_EVENT_SORT: SortOrder[] = [{ field: 'startsAt', direction: 'asc' }];
+
+/** An event nobody has registered for. Shared so it is never rebuilt per row. */
+const EMPTY_COUNTS: EventCounts = { confirmed: 0, waitlisted: 0 };
 
 @Injectable()
 export class EventsService {
@@ -69,7 +72,14 @@ export class EventsService {
       this.prisma.event.count({ where }),
     ]);
 
-    return PagedResponse.of(events.map(toEventResponse), page, size, totalItems);
+    // One grouped query for the whole page, not one per event.
+    const counts = await this.countsForMany(events.map((event) => event.id));
+
+    const counted = events.map((event) =>
+      toEventResponse(event, counts.get(event.id) ?? EMPTY_COUNTS),
+    );
+
+    return PagedResponse.of(counted, page, size, totalItems);
   }
 
   async findOne(id: string): Promise<EventResponseDto> {
@@ -79,7 +89,7 @@ export class EventsService {
       throw new ResourceNotFoundError('event', id);
     }
 
-    return toEventResponse(event);
+    return toEventResponse(event, await this.countsFor(id));
   }
 
   async create(dto: CreateEventDto): Promise<EventResponseDto> {
@@ -104,7 +114,8 @@ export class EventsService {
       },
     });
 
-    return toEventResponse(event);
+    // A brand-new event holds nothing, so this needs no queries to establish.
+    return toEventResponse(event, { confirmed: 0, waitlisted: 0 });
   }
 
   /**
@@ -203,7 +214,7 @@ export class EventsService {
     // After the commit, never inside it.
     this.waitlist.announce(promoted);
 
-    return toEventResponse(updated);
+    return toEventResponse(updated, await this.countsFor(updated.id));
   }
 
   publish(id: string): Promise<EventResponseDto> {
@@ -247,7 +258,7 @@ export class EventsService {
         data: { status: outcome.to },
       });
 
-      return toEventResponse(updated);
+      return toEventResponse(updated, await this.countsFor(updated.id));
     }
 
     // Cancelling an event cancels everyone's place in it, and the two must
@@ -270,7 +281,61 @@ export class EventsService {
       return tx.event.update({ where: { id }, data: { status: 'CANCELLED' } });
     });
 
-    return toEventResponse(updated);
+    return toEventResponse(updated, await this.countsFor(updated.id));
+  }
+
+  private async countsFor(eventId: string): Promise<EventCounts> {
+    return (await this.countsForMany([eventId])).get(eventId) ?? EMPTY_COUNTS;
+  }
+
+  /**
+   * Registration counts for many events, in **one** query.
+   *
+   * This replaced two counts per event. Measured on a page of ten events, with
+   * the query-counting client extension:
+   *
+   *     before   22 queries   (2 for the page and its total, then 2 per event)
+   *     after     3 queries   (page, total, and this one)
+   *
+   * The number that matters is not three. It is that listing five events and
+   * listing ten now cost the same, which is what the performance test asserts —
+   * a magic number goes stale the first time a legitimate query is added, and
+   * says nothing about whether the cost grows with the data.
+   *
+   * groupBy rather than a filtered `_count` include, because two counts are
+   * needed per event and a relation count can carry only one filter. One
+   * grouped query returns both, and says plainly what it is doing.
+   */
+  private async countsForMany(eventIds: string[]): Promise<Map<string, EventCounts>> {
+    const counts = new Map<string, EventCounts>(
+      eventIds.map((id) => [id, { confirmed: 0, waitlisted: 0 }]),
+    );
+
+    if (eventIds.length === 0) {
+      return counts;
+    }
+
+    const grouped = await this.prisma.registration.groupBy({
+      by: ['eventId', 'status'],
+      where: { eventId: { in: eventIds }, status: { in: ['CONFIRMED', 'WAITLISTED'] } },
+      _count: { _all: true },
+    });
+
+    for (const row of grouped) {
+      const entry = counts.get(row.eventId);
+
+      if (entry === undefined) {
+        continue;
+      }
+
+      if (row.status === 'CONFIRMED') {
+        entry.confirmed = row._count._all;
+      } else {
+        entry.waitlisted = row._count._all;
+      }
+    }
+
+    return counts;
   }
 
   private async requireEvent(id: string): Promise<PrismaEvent> {
