@@ -1,6 +1,11 @@
 import { Injectable } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 
 import type { Prisma, Registration } from '../generated/prisma/client';
+import {
+  REGISTRATION_PROMOTED,
+  RegistrationPromotedEvent,
+} from './events/registration-promoted.event';
 import { seatsAvailable, selectForPromotion } from './policy/waitlist';
 
 /**
@@ -13,6 +18,8 @@ import { seatsAvailable, selectForPromotion } from './policy/waitlist';
  */
 @Injectable()
 export class WaitlistService {
+  constructor(private readonly emitter: EventEmitter2) {}
+
   /**
    * Promote as many from the queue as there are seats, in ticket order.
    *
@@ -62,5 +69,29 @@ export class WaitlistService {
     }
 
     return promoted;
+  }
+
+  /**
+   * Announce promotions — **after** the caller's transaction has committed.
+   *
+   * Never from inside `promote`, which runs within it. A listener that sends
+   * an email from inside a transaction sends it whether or not the transaction
+   * survives, and a promotion that rolls back has still told somebody they got
+   * a seat. Constructing the events here keeps their shape in one place while
+   * leaving the timing where it belongs: with whoever knows the commit
+   * happened.
+   */
+  announce(promoted: readonly Registration[]): void {
+    for (const registration of promoted) {
+      this.emitter.emit(
+        REGISTRATION_PROMOTED,
+        new RegistrationPromotedEvent(
+          registration.id,
+          registration.eventId,
+          registration.attendeeId,
+          registration.updatedAt,
+        ),
+      );
+    }
   }
 }

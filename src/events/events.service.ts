@@ -200,9 +200,8 @@ export class EventsService {
       };
     }, EventsService.TRANSACTION_OPTIONS);
 
-    for (const registration of promoted) {
-      this.logger.log(`promoted registration ${registration.id} after capacity rose on ${id}`);
-    }
+    // After the commit, never inside it.
+    this.waitlist.announce(promoted);
 
     return toEventResponse(updated);
   }

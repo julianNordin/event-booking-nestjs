@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { EventEmitterModule } from '@nestjs/event-emitter';
 
 import { AttendeesModule } from './attendees/attendees.module';
 import { ClockModule } from './common/clock/clock.module';
@@ -22,6 +23,7 @@ import { RegistrationsModule } from './registrations/registrations.module';
       load: [appConfig, databaseConfig],
       validate: validateEnv,
     }),
+    EventEmitterModule.forRoot(),
     ClockModule,
     PrismaModule,
     EventsModule,

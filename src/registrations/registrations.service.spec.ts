@@ -64,6 +64,7 @@ describe('RegistrationsService', () => {
   const findEventOrThrow = jest.fn();
   const findRegistrationOrThrow = jest.fn();
   const promote = jest.fn();
+  const announce = jest.fn();
 
   // $transaction(fn) hands the callback a client scoped to the transaction.
   // Running it immediately against a stand-in lets these tests assert what
@@ -104,6 +105,7 @@ describe('RegistrationsService', () => {
     findRegistrationOrThrow.mockReset();
     promote.mockReset();
     promote.mockResolvedValue([]);
+    announce.mockReset();
     $transaction.mockClear();
 
     aggregate.mockResolvedValue({ _max: { waitlistPosition: null } });
@@ -134,7 +136,7 @@ describe('RegistrationsService', () => {
         // Time as an ordinary argument. Every rule below is a comparison
         // against this instant, and none of them touches the real clock.
         { provide: Clock, useValue: { now: () => NOW } },
-        { provide: WaitlistService, useValue: { promote } },
+        { provide: WaitlistService, useValue: { promote, announce } },
       ],
     }).compile();
 
@@ -574,6 +576,57 @@ describe('RegistrationsService', () => {
       const lockedAt = lockEvent.mock.invocationCallOrder[0] ?? 0;
       expect(aggregatedAt).toBeGreaterThan(lockedAt);
       expect(written()).toMatchObject({ waitlistPosition: 3 });
+    });
+  });
+
+  describe('announcing a promotion', () => {
+    beforeEach(() => {
+      givenEvent(anEvent({ capacity: 10 }));
+      findEventOrThrow.mockResolvedValue({ capacity: 10, waitlistEnabled: true });
+      count.mockResolvedValue(0);
+      findMany.mockResolvedValue([]);
+      givenRegistration(aRegistration({ status: 'CONFIRMED' }));
+      update.mockResolvedValue(aRegistration({ status: 'CANCELLED' }));
+    });
+
+    it('announces whoever was promoted', async () => {
+      const promotedRows = [aRegistration({ id: 'promoted-1', status: 'CONFIRMED' })];
+      promote.mockResolvedValue(promotedRows);
+
+      await service.cancel('r1');
+
+      expect(announce).toHaveBeenCalledWith(promotedRows);
+    });
+
+    it('announces after the transaction, never inside it', async () => {
+      // A listener that emails from inside the transaction sends the mail
+      // whether or not the transaction survives, and a promotion that rolls
+      // back has still told somebody they got a seat.
+      promote.mockResolvedValue([aRegistration({ id: 'promoted-1' })]);
+
+      await service.cancel('r1');
+
+      const transactionAt = $transaction.mock.invocationCallOrder[0] ?? 0;
+      const announcedAt = announce.mock.invocationCallOrder[0] ?? 0;
+      expect(announcedAt).toBeGreaterThan(transactionAt);
+    });
+
+    it('announces nothing when nobody was promoted', async () => {
+      promote.mockResolvedValue([]);
+
+      await service.cancel('r1');
+
+      expect(announce).toHaveBeenCalledWith([]);
+    });
+
+    it('announces nothing when the cancellation freed no seat', async () => {
+      // Leaving the queue frees nothing, so promote is never consulted.
+      givenRegistration(aRegistration({ status: 'WAITLISTED', waitlistPosition: 2 }));
+
+      await service.cancel('r1');
+
+      expect(promote).not.toHaveBeenCalled();
+      expect(announce).toHaveBeenCalledWith([]);
     });
   });
 });

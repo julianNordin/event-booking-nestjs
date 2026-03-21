@@ -1,4 +1,5 @@
 import { ResourceNotFoundError } from '../../src/common/errors/domain-error';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Test } from '@nestjs/testing';
 
 import { EventsService } from '../../src/events/events.service';
@@ -27,6 +28,7 @@ describe('EventsService against a real database', () => {
       providers: [
         EventsService,
         WaitlistService,
+        EventEmitter2,
         { provide: PrismaService, useValue: testPrisma() },
       ],
     }).compile();

@@ -1,3 +1,4 @@
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Test } from '@nestjs/testing';
 
 import { Clock } from '../../src/common/clock/clock.service';
@@ -50,6 +51,7 @@ describe('registrations against a real database', () => {
       providers: [
         RegistrationsService,
         WaitlistService,
+        EventEmitter2,
         { provide: PrismaService, useValue: testPrisma() },
         { provide: Clock, useValue: clock },
       ],

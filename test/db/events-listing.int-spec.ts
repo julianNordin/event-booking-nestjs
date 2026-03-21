@@ -1,3 +1,4 @@
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Test } from '@nestjs/testing';
 
 import { MAX_PAGE_SIZE } from '../../src/common/dto/page-query.dto';
@@ -34,6 +35,7 @@ describe('listing events against a real database', () => {
       providers: [
         EventsService,
         WaitlistService,
+        EventEmitter2,
         { provide: PrismaService, useValue: testPrisma() },
       ],
     }).compile();

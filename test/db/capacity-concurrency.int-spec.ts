@@ -1,3 +1,4 @@
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Test } from '@nestjs/testing';
 
 import { Clock, SystemClock } from '../../src/common/clock/clock.service';
@@ -28,6 +29,7 @@ describe('capacity under concurrent registration', () => {
       providers: [
         RegistrationsService,
         WaitlistService,
+        EventEmitter2,
         { provide: PrismaService, useValue: testPrisma() },
         { provide: Clock, useClass: SystemClock },
       ],

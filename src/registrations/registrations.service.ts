@@ -257,11 +257,8 @@ export class RegistrationsService {
       };
     }, RegistrationsService.TRANSACTION_OPTIONS);
 
-    for (const registration of promoted) {
-      this.logger.log(
-        `promoted registration ${registration.id} to CONFIRMED for event ${subject.eventId}`,
-      );
-    }
+    // After the commit, never inside it.
+    this.waitlist.announce(promoted);
 
     return toRegistrationResponse(cancelled);
   }

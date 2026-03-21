@@ -43,6 +43,7 @@ describe('EventsService', () => {
   const lockEvent = jest.fn();
   const findEventOrThrow = jest.fn();
   const promote = jest.fn();
+  const announce = jest.fn();
   const txRegistrationUpdateMany = jest.fn();
 
   // $transaction has two forms and this service uses both. Given a callback it
@@ -74,6 +75,7 @@ describe('EventsService', () => {
     findEventOrThrow.mockReset();
     promote.mockReset();
     promote.mockResolvedValue([]);
+    announce.mockReset();
     txRegistrationUpdateMany.mockReset();
     $transaction.mockClear();
 
@@ -92,7 +94,7 @@ describe('EventsService', () => {
             $transaction,
           },
         },
-        { provide: WaitlistService, useValue: { promote } },
+        { provide: WaitlistService, useValue: { promote, announce } },
       ],
     }).compile();
 

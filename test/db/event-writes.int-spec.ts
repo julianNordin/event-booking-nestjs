@@ -2,6 +2,7 @@ import {
   RuleViolationError,
   TransitionNotAllowedError,
 } from '../../src/common/errors/domain-error';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Test } from '@nestjs/testing';
 
 import { EVENT_LIMITS } from '../../src/events/event-limits';
@@ -21,6 +22,7 @@ describe('event writes against a real database', () => {
       providers: [
         EventsService,
         WaitlistService,
+        EventEmitter2,
         { provide: PrismaService, useValue: testPrisma() },
       ],
     }).compile();

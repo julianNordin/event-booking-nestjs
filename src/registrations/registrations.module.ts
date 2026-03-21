@@ -2,13 +2,14 @@ import { Module } from '@nestjs/common';
 
 import { EventRegistrationsController } from './event-registrations.controller';
 import { EventWaitlistController } from './event-waitlist.controller';
+import { RegistrationPromotedListener } from './events/registration-promoted.listener';
 import { RegistrationsController } from './registrations.controller';
 import { RegistrationsService } from './registrations.service';
 import { WaitlistService } from './waitlist.service';
 
 @Module({
   controllers: [EventRegistrationsController, EventWaitlistController, RegistrationsController],
-  providers: [RegistrationsService, WaitlistService],
+  providers: [RegistrationsService, WaitlistService, RegistrationPromotedListener],
   // WaitlistService is exported because raising an event's capacity has to
   // serve the queue too, and it must do it the same way cancelling does.
   exports: [RegistrationsService, WaitlistService],
