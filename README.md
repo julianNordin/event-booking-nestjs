@@ -121,6 +121,63 @@ should have.
 It would work on one process and silently stop working on two. The lock has to live where the shared
 state lives.
 
+## Query plans
+
+Measured on 5,000 events and 50,000 registrations, with `EXPLAIN (ANALYZE, BUFFERS)`. Indexes were
+added because a plan asked for one, not because a column looked like it wanted indexing.
+
+| Query                                    | Plan                                                  | Time        |
+| ---------------------------------------- | ----------------------------------------------------- | ----------- |
+| List published events, soonest first     | Index Scan `events_status_starts_at_idx`              | 0.08 ms     |
+| Registration counts for a page of events | Nested Loop over `ux_registration_active`             | 0.31 ms     |
+| One event's waitlist, in ticket order    | Bitmap Index Scan `registrations_event_id_status_idx` | 0.03 ms     |
+| One attendee's registrations             | Bitmap Index Scan `registrations_attendee_id_idx`     | 0.13 ms     |
+| **Free-text search** (before)            | **Seq Scan**, 4,999 rows discarded                    | **5.55 ms** |
+| **Free-text search** (after)             | Bitmap Index Scan `ix_events_title_trgm`              | **0.25 ms** |
+
+Four of the five were already index-backed and well under a millisecond, so nothing was added for
+them. Speculative indexes are not free: every one slows down every write and takes space, and one
+added "just in case" is one nobody will ever dare remove.
+
+### The one that needed help
+
+Search is `ILIKE '%term%'`, and a btree cannot serve a leading wildcard — there is no prefix to seek
+on. The fix is a trigram GIN index on each searchable column, which turns a full table scan into a
+bitmap index scan, about twenty times faster here.
+
+The extension it needs is created in the migration:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+```
+
+The indexes themselves are declared in `schema.prisma`, not hand-written. Prisma does **not** notice
+partial indexes, expression indexes or `CHECK` constraints, so those live only in migration SQL — but
+it does recognise a plain-column GIN index, and `migrate diff` proposed a `DROP INDEX` for one it
+could not see in the schema. Prisma can express this one, so it should.
+
+### What the planner does with a bad search term
+
+A search matching a quarter of the table still gets a sequential scan, even with the index in place.
+That is correct, and worth stating because it looks like the index failing: walking 1,250 index
+entries and then fetching 1,250 heap rows is slower than reading 112 pages in order. The index earns
+its place on the selective searches people actually type.
+
+### N+1
+
+Listing events with their registration counts used to cost `2 + 2N` queries — two for the page and
+its total, then two more per event. Measured with the Prisma client extension in
+`src/prisma/query-counter.ts`:
+
+| Page size | Before     | After     |
+| --------- | ---------- | --------- |
+| 5 events  | 12 queries | 3 queries |
+| 10 events | 22 queries | 3 queries |
+
+The test asserts that five events and ten cost the **same** number of queries, rather than asserting
+a particular number. A magic number goes stale the first time somebody adds a legitimate query, and
+it says nothing about whether the cost grows with the data — which is the only property that matters.
+
 ## Roadmap
 
 - [x] 01 — Scaffold & tooling

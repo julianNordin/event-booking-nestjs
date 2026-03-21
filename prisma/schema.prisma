@@ -60,6 +60,12 @@ model Event {
 
   // The listing endpoint's default query is "published events, soonest first".
   @@index([status, startsAt])
+
+  // Trigram indexes for the free-text search. Declared here rather than only in
+  // the migration because Prisma *does* recognise a plain-column GIN index and
+  // would generate a DROP for one it cannot see in the schema.
+  @@index([title(ops: raw("gin_trgm_ops"))], map: "ix_events_title_trgm", type: Gin)
+  @@index([description(ops: raw("gin_trgm_ops"))], map: "ix_events_description_trgm", type: Gin)
   @@map("events")
 }
 

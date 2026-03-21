@@ -20,6 +20,7 @@ describe('the migrated test schema', () => {
       '20260307091447_create_registrations',
       '20260307094903_add_active_registration_and_email_indexes',
       '20260307095831_add_event_check_constraints',
+      '20260321110639_add_trigram_search_indexes',
     ]);
   });
 
@@ -50,6 +51,33 @@ describe('the migrated test schema', () => {
     `;
 
     expect(rows.map((row) => row.name)).toEqual(['ck_events_capacity', 'ck_events_ends_after']);
+  });
+
+  it('carries the trigram indexes the search plans asked for', async () => {
+    // Free-text search was the one query the plans showed doing a sequential
+    // scan. These are what turn it into a bitmap index scan.
+    const rows = await prisma.$queryRaw<NameRow[]>`
+      SELECT indexname AS name
+      FROM pg_indexes
+      WHERE schemaname = current_schema()
+        AND indexname IN ('ix_events_title_trgm', 'ix_events_description_trgm')
+      ORDER BY indexname
+    `;
+
+    expect(rows.map((row) => row.name)).toEqual([
+      'ix_events_description_trgm',
+      'ix_events_title_trgm',
+    ]);
+  });
+
+  it('has the pg_trgm extension those indexes depend on', async () => {
+    // Ships with PostgreSQL but is not enabled by default, so the migration
+    // creates it. Without the extension the indexes cannot exist at all.
+    const rows = await prisma.$queryRaw<NameRow[]>`
+      SELECT extname AS name FROM pg_extension WHERE extname = 'pg_trgm'
+    `;
+
+    expect(rows).toHaveLength(1);
   });
 
   it('keeps the active-registration index partial rather than plain unique', async () => {
