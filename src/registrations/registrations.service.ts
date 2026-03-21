@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 
 import { Clock } from '../common/clock/clock.service';
 import {
@@ -11,10 +11,13 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CreateRegistrationDto } from './dto/create-registration.dto';
 import { RegistrationResponseDto } from './dto/registration-response.dto';
 import { decideRegistration } from './policy/registration-policy';
+import { seatsAvailable, selectForPromotion } from './policy/waitlist';
 import { toRegistrationResponse } from './registration.mapper';
 
 @Injectable()
 export class RegistrationsService {
+  private readonly logger = new Logger(RegistrationsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly clock: Clock,
@@ -150,38 +153,128 @@ export class RegistrationsService {
   }
 
   /**
-   * Give up a seat or a place in the queue.
+   * Give up a seat or a place in the queue, and let the next person in.
    *
-   * The row is kept and marked CANCELLED rather than deleted: it is the record
-   * that this person did once hold a place, and the partial unique index is
-   * written to ignore cancelled rows precisely so they can register again.
+   * Cancelling and promoting are one transaction under the event's row lock —
+   * the same lock registration takes. That is not tidiness, it is the whole
+   * correctness argument:
    *
-   * Promoting whoever is next off the waitlist belongs here too, and does not
-   * happen yet — that lands in the waitlist phase, inside this transaction.
+   * - Without it, two cancellations at an event with two people queued both
+   *   read one free seat, both pick the front of the queue, and promote the
+   *   *same* person twice. The second person stays waiting while a seat sits
+   *   empty, and nothing errors.
+   * - Cancelling first and promoting after would leave a window in which the
+   *   seat is free and the queue is not being served, so a registration
+   *   arriving in between takes a seat that was owed to somebody in the queue.
+   *
+   * The registration is re-read *inside* the lock. Its status may have changed
+   * between the lookup that told us which event to lock and the lock being
+   * granted, and that re-read is what makes a double cancellation refuse rather
+   * than promote twice.
    */
   async cancel(id: string): Promise<RegistrationResponseDto> {
-    const registration = await this.requireRegistration(id);
+    // Read once outside the transaction, only to learn which event row to lock.
+    // Nothing is decided on this copy.
+    const subject = await this.requireRegistration(id);
 
-    if (registration.status === 'CANCELLED') {
-      throw new TransitionNotAllowedError(
-        'this registration has already been cancelled',
-        registration.status,
-        'cancel',
+    const { cancelled, promoted } = await this.prisma.$transaction(async (tx) => {
+      const locked = await tx.$queryRaw<{ id: string }[]>`
+        SELECT id FROM events WHERE id = ${subject.eventId}::uuid FOR UPDATE
+      `;
+
+      if (locked.length === 0) {
+        throw new ResourceNotFoundError('event', subject.eventId);
+      }
+
+      const registration = await tx.registration.findUniqueOrThrow({ where: { id } });
+
+      if (registration.status === 'CANCELLED') {
+        throw new TransitionNotAllowedError(
+          'this registration has already been cancelled',
+          registration.status,
+          'cancel',
+        );
+      }
+
+      const cancelledRow = await tx.registration.update({
+        where: { id },
+        data: {
+          status: 'CANCELLED',
+          cancelledAt: this.clock.now(),
+          // Vacating the ticket as well as the status. A cancelled row that
+          // keeps its number still claims a place in a queue it has left.
+          waitlistPosition: null,
+        },
+      });
+
+      // Only a confirmed seat frees a seat. Leaving the queue frees nothing,
+      // and promoting on a waitlist cancellation would confirm someone the
+      // event has no room for.
+      if (registration.status !== 'CONFIRMED') {
+        return { cancelled: cancelledRow, promoted: [] };
+      }
+
+      return {
+        cancelled: cancelledRow,
+        promoted: await this.promote(tx, subject.eventId),
+      };
+    }, RegistrationsService.TRANSACTION_OPTIONS);
+
+    for (const registration of promoted) {
+      this.logger.log(
+        `promoted registration ${registration.id} to CONFIRMED for event ${subject.eventId}`,
       );
     }
 
-    const cancelled = await this.prisma.registration.update({
-      where: { id },
-      data: {
-        status: 'CANCELLED',
-        cancelledAt: this.clock.now(),
-        // Vacating the position as well as the status. Leaving it behind means
-        // a cancelled row still claims a place in a queue it has left.
-        waitlistPosition: null,
-      },
+    return toRegistrationResponse(cancelled);
+  }
+
+  /**
+   * Fill whatever seats are free from the front of the queue.
+   *
+   * Must be called with the event row already locked. Everything it reads —
+   * the capacity, the confirmed count, the queue — has to be consistent with
+   * everything it writes, and outside the lock none of it is.
+   */
+  private async promote(
+    tx: Prisma.TransactionClient,
+    eventId: string,
+  ): Promise<PrismaRegistration[]> {
+    const event = await tx.event.findUniqueOrThrow({
+      where: { id: eventId },
+      select: { capacity: true, waitlistEnabled: true },
     });
 
-    return toRegistrationResponse(cancelled);
+    const confirmedCount = await tx.registration.count({
+      where: { eventId, status: 'CONFIRMED' },
+    });
+
+    const seats = seatsAvailable(event.capacity, confirmedCount);
+
+    if (seats === 0) {
+      return [];
+    }
+
+    const queue = await tx.registration.findMany({
+      where: { eventId, status: 'WAITLISTED' },
+      select: { id: true, waitlistPosition: true },
+    });
+
+    const chosen = selectForPromotion(queue, seats);
+    const promoted: PrismaRegistration[] = [];
+
+    // Sequentially, not in parallel: they share one transaction, and firing
+    // them at once on a single connection buys nothing but interleaving.
+    for (const entry of chosen) {
+      promoted.push(
+        await tx.registration.update({
+          where: { id: entry.id },
+          data: { status: 'CONFIRMED', waitlistPosition: null },
+        }),
+      );
+    }
+
+    return promoted;
   }
 
   private async requireRegistration(id: string): Promise<PrismaRegistration> {

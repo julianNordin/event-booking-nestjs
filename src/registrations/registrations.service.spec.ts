@@ -61,6 +61,7 @@ describe('RegistrationsService', () => {
   const deleteRegistration = jest.fn();
   const lockEvent = jest.fn();
   const findEventOrThrow = jest.fn();
+  const findRegistrationOrThrow = jest.fn();
 
   // $transaction(fn) hands the callback a client scoped to the transaction.
   // Running it immediately against a stand-in lets these tests assert what
@@ -74,7 +75,14 @@ describe('RegistrationsService', () => {
       run({
         $queryRaw: lockEvent,
         event: { findUniqueOrThrow: findEventOrThrow },
-        registration: { count, create, aggregate },
+        registration: {
+          count,
+          create,
+          aggregate,
+          findUniqueOrThrow: findRegistrationOrThrow,
+          findMany,
+          update,
+        },
       }),
   );
   let service: RegistrationsService;
@@ -91,6 +99,7 @@ describe('RegistrationsService', () => {
     deleteRegistration.mockReset();
     lockEvent.mockReset();
     findEventOrThrow.mockReset();
+    findRegistrationOrThrow.mockReset();
     $transaction.mockClear();
 
     aggregate.mockResolvedValue({ _max: { waitlistPosition: null } });
@@ -152,6 +161,15 @@ describe('RegistrationsService', () => {
     lockEvent.mockResolvedValue(event === null ? [] : [{ id: event.id ?? EVENT_ID }]);
     findEventOrThrow.mockResolvedValue(event);
     findEvent.mockResolvedValue(event);
+  }
+
+  /**
+   * The registration, as both reads see it: the lookup outside the transaction
+   * that decides which event to lock, and the authoritative re-read inside it.
+   */
+  function givenRegistration(registration: Registration | null): void {
+    findRegistration.mockResolvedValue(registration);
+    findRegistrationOrThrow.mockResolvedValue(registration);
   }
 
   function written(): Partial<Registration> {
@@ -373,15 +391,24 @@ describe('RegistrationsService', () => {
   });
 
   describe('cancel', () => {
+    beforeEach(() => {
+      // Enough for the promotion pass to run and find nobody waiting, which is
+      // the uninteresting case these tests are not about.
+      givenEvent(anEvent({ capacity: 10 }));
+      findEventOrThrow.mockResolvedValue({ capacity: 10, waitlistEnabled: true });
+      count.mockResolvedValue(0);
+      findMany.mockResolvedValue([]);
+    });
+
     it('raises not-found for a registration that does not exist', async () => {
-      findRegistration.mockResolvedValue(null);
+      givenRegistration(null);
 
       await expect(service.cancel('missing')).rejects.toBeInstanceOf(ResourceNotFoundError);
       expect(update).not.toHaveBeenCalled();
     });
 
     it('marks it cancelled and stamps the injected clock', async () => {
-      findRegistration.mockResolvedValue(aRegistration({ status: 'CONFIRMED' }));
+      givenRegistration(aRegistration({ status: 'CONFIRMED' }));
       update.mockResolvedValue(aRegistration({ status: 'CANCELLED', cancelledAt: NOW }));
 
       await service.cancel('r1');
@@ -395,9 +422,7 @@ describe('RegistrationsService', () => {
     it('vacates the waitlist position as well as the status', async () => {
       // A cancelled row that keeps its position still claims a place in a queue
       // it has left, and the next promotion would skip over it.
-      findRegistration.mockResolvedValue(
-        aRegistration({ status: 'WAITLISTED', waitlistPosition: 3 }),
-      );
+      givenRegistration(aRegistration({ status: 'WAITLISTED', waitlistPosition: 3 }));
       update.mockResolvedValue(aRegistration({ status: 'CANCELLED' }));
 
       await service.cancel('r1');
@@ -409,7 +434,7 @@ describe('RegistrationsService', () => {
     it('keeps the row rather than deleting it', async () => {
       // It is the record that this person held a place, and the partial unique
       // index ignores cancelled rows precisely so they can register again.
-      findRegistration.mockResolvedValue(aRegistration({ status: 'CONFIRMED' }));
+      givenRegistration(aRegistration({ status: 'CONFIRMED' }));
       update.mockResolvedValue(aRegistration({ status: 'CANCELLED' }));
 
       await service.cancel('r1');
@@ -418,16 +443,16 @@ describe('RegistrationsService', () => {
     });
 
     it('refuses to cancel the same registration twice', async () => {
-      findRegistration.mockResolvedValue(aRegistration({ status: 'CANCELLED' }));
+      // The refusal comes from the re-read inside the lock, which is what makes
+      // two simultaneous cancellations refuse instead of promoting twice.
+      givenRegistration(aRegistration({ status: 'CANCELLED' }));
 
       await expect(service.cancel('r1')).rejects.toBeInstanceOf(TransitionNotAllowedError);
       expect(update).not.toHaveBeenCalled();
     });
 
     it('cancels a waitlisted place as readily as a confirmed one', async () => {
-      findRegistration.mockResolvedValue(
-        aRegistration({ status: 'WAITLISTED', waitlistPosition: 1 }),
-      );
+      givenRegistration(aRegistration({ status: 'WAITLISTED', waitlistPosition: 1 }));
       update.mockResolvedValue(aRegistration({ status: 'CANCELLED' }));
 
       await expect(service.cancel('r1')).resolves.toMatchObject({ status: 'CANCELLED' });
@@ -436,13 +461,13 @@ describe('RegistrationsService', () => {
 
   describe('findOne', () => {
     it('returns the registration', async () => {
-      findRegistration.mockResolvedValue(aRegistration());
+      givenRegistration(aRegistration());
 
       await expect(service.findOne('r1')).resolves.toMatchObject({ status: 'CONFIRMED' });
     });
 
     it('raises not-found rather than returning null', async () => {
-      findRegistration.mockResolvedValue(null);
+      givenRegistration(null);
 
       await expect(service.findOne('r1')).rejects.toBeInstanceOf(ResourceNotFoundError);
     });
