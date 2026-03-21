@@ -3,6 +3,7 @@ import { Test } from '@nestjs/testing';
 
 import { EventsService } from '../../src/events/events.service';
 import { PrismaService } from '../../src/prisma/prisma.service';
+import { WaitlistService } from '../../src/registrations/waitlist.service';
 import { createEvent } from '../support/factories';
 import { testPrisma } from '../support/prisma';
 
@@ -23,7 +24,11 @@ describe('EventsService against a real database', () => {
     const moduleRef = await Test.createTestingModule({
       // The real query path, bound to the shared container client so the suite
       // does not open a second connection pool per test file.
-      providers: [EventsService, { provide: PrismaService, useValue: testPrisma() }],
+      providers: [
+        EventsService,
+        WaitlistService,
+        { provide: PrismaService, useValue: testPrisma() },
+      ],
     }).compile();
 
     service = moduleRef.get(EventsService);

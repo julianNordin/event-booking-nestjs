@@ -9,6 +9,7 @@ import { Test } from '@nestjs/testing';
 
 import type { Event } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { WaitlistService } from '../registrations/waitlist.service';
 import { EventsService } from './events.service';
 
 function anEventRow(overrides: Partial<Event> = {}): Event {
@@ -39,6 +40,9 @@ describe('EventsService', () => {
   const count = jest.fn();
   const deleteFn = jest.fn();
   const txEventUpdate = jest.fn();
+  const lockEvent = jest.fn();
+  const findEventOrThrow = jest.fn();
+  const promote = jest.fn();
   const txRegistrationUpdateMany = jest.fn();
 
   // $transaction has two forms and this service uses both. Given a callback it
@@ -50,8 +54,9 @@ describe('EventsService', () => {
     Array.isArray(argument)
       ? Promise.all(argument as Promise<unknown>[])
       : (argument as (tx: unknown) => Promise<unknown>)({
-          event: { update: txEventUpdate },
-          registration: { updateMany: txRegistrationUpdateMany },
+          $queryRaw: lockEvent,
+          event: { update: txEventUpdate, findUniqueOrThrow: findEventOrThrow },
+          registration: { updateMany: txRegistrationUpdateMany, count },
         }),
   );
   let service: EventsService;
@@ -65,6 +70,10 @@ describe('EventsService', () => {
     count.mockReset();
     deleteFn.mockReset();
     txEventUpdate.mockReset();
+    lockEvent.mockReset();
+    findEventOrThrow.mockReset();
+    promote.mockReset();
+    promote.mockResolvedValue([]);
     txRegistrationUpdateMany.mockReset();
     $transaction.mockClear();
 
@@ -83,6 +92,7 @@ describe('EventsService', () => {
             $transaction,
           },
         },
+        { provide: WaitlistService, useValue: { promote } },
       ],
     }).compile();
 
@@ -419,8 +429,18 @@ describe('EventsService', () => {
   describe('update', () => {
     const id = '0195e3a0-0000-7000-8000-000000000001';
 
+    /**
+     * The event as both reads inside the transaction see it: the row lock
+     * returns it (or nothing, when it is gone) and the authoritative re-read
+     * returns the row itself.
+     */
+    function givenEvent(event: Event | null): void {
+      lockEvent.mockResolvedValue(event === null ? [] : [{ id }]);
+      findEventOrThrow.mockResolvedValue(event);
+    }
+
     function updatedData(): Record<string, unknown> {
-      const calls = update.mock.calls as [{ data: Record<string, unknown> }][];
+      const calls = txEventUpdate.mock.calls as [{ data: Record<string, unknown> }][];
       const first = calls[0];
       if (first === undefined) {
         throw new Error('expected the service to have written something');
@@ -429,30 +449,30 @@ describe('EventsService', () => {
     }
 
     it('raises not-found when the event does not exist', async () => {
-      findUnique.mockResolvedValue(null);
+      givenEvent(null);
 
       await expect(service.update(id, { title: 'x' })).rejects.toBeInstanceOf(
         ResourceNotFoundError,
       );
-      expect(update).not.toHaveBeenCalled();
+      expect(txEventUpdate).not.toHaveBeenCalled();
     });
 
     it('refuses to edit a cancelled event', async () => {
       // Terminal in the state machine, terminal here: the row is the record of
       // something called off, and editing it rewrites what attendees were told.
-      findUnique.mockResolvedValue(anEventRow({ status: 'CANCELLED' }));
+      givenEvent(anEventRow({ status: 'CANCELLED' }));
 
       await expect(service.update(id, { title: 'x' })).rejects.toBeInstanceOf(
         TransitionNotAllowedError,
       );
-      expect(update).not.toHaveBeenCalled();
+      expect(txEventUpdate).not.toHaveBeenCalled();
     });
 
     it('leaves absent fields untouched by passing undefined through', async () => {
       // Prisma reads undefined as "do not change this column", which is exactly
       // what an absent PATCH field means.
-      findUnique.mockResolvedValue(anEventRow());
-      update.mockResolvedValue(anEventRow({ title: 'renamed' }));
+      givenEvent(anEventRow());
+      txEventUpdate.mockResolvedValue(anEventRow({ title: 'renamed' }));
 
       await service.update(id, { title: 'renamed' });
 
@@ -462,8 +482,8 @@ describe('EventsService', () => {
     });
 
     it('clears a field when the client sends null explicitly', async () => {
-      findUnique.mockResolvedValue(anEventRow());
-      update.mockResolvedValue(anEventRow());
+      givenEvent(anEventRow());
+      txEventUpdate.mockResolvedValue(anEventRow());
 
       await service.update(id, { description: null });
 
@@ -474,7 +494,7 @@ describe('EventsService', () => {
       it('checks a new endsAt against the stored startsAt', async () => {
         // The bug this prevents: patching one field at a time walks the event
         // into a state no single request would have been allowed to create.
-        findUnique.mockResolvedValue(
+        givenEvent(
           anEventRow({
             startsAt: new Date('2027-03-29T09:00:00.000Z'),
             endsAt: new Date('2027-03-29T17:00:00.000Z'),
@@ -485,11 +505,11 @@ describe('EventsService', () => {
           service.update(id, { endsAt: new Date('2027-03-29T08:00:00.000Z') }),
         ).rejects.toBeInstanceOf(ValidationFailedError);
 
-        expect(update).not.toHaveBeenCalled();
+        expect(txEventUpdate).not.toHaveBeenCalled();
       });
 
       it('checks a new startsAt against the stored endsAt', async () => {
-        findUnique.mockResolvedValue(
+        givenEvent(
           anEventRow({
             startsAt: new Date('2027-03-29T09:00:00.000Z'),
             endsAt: new Date('2027-03-29T17:00:00.000Z'),
@@ -502,8 +522,8 @@ describe('EventsService', () => {
       });
 
       it('accepts a coherent pair moved together', async () => {
-        findUnique.mockResolvedValue(anEventRow());
-        update.mockResolvedValue(anEventRow());
+        givenEvent(anEventRow());
+        txEventUpdate.mockResolvedValue(anEventRow());
 
         await expect(
           service.update(id, {
@@ -516,19 +536,20 @@ describe('EventsService', () => {
 
     describe('capacity', () => {
       it('may be raised without counting anything', async () => {
-        findUnique.mockResolvedValue(anEventRow({ capacity: 40 }));
-        update.mockResolvedValue(anEventRow({ capacity: 100 }));
+        givenEvent(anEventRow({ capacity: 40 }));
+        txEventUpdate.mockResolvedValue(anEventRow({ capacity: 100 }));
 
         await service.update(id, { capacity: 100 });
 
         expect(count).not.toHaveBeenCalled();
         expect(updatedData().capacity).toBe(100);
+        expect(promote).toHaveBeenCalledTimes(1);
       });
 
       it('may be lowered to exactly the confirmed count', async () => {
-        findUnique.mockResolvedValue(anEventRow({ capacity: 40 }));
+        givenEvent(anEventRow({ capacity: 40 }));
         count.mockResolvedValue(10);
-        update.mockResolvedValue(anEventRow({ capacity: 10 }));
+        txEventUpdate.mockResolvedValue(anEventRow({ capacity: 10 }));
 
         await expect(service.update(id, { capacity: 10 })).resolves.toBeDefined();
       });
@@ -536,19 +557,19 @@ describe('EventsService', () => {
       it('may not be lowered below the confirmed count', async () => {
         // Otherwise the event is overbooked by construction, with no way to
         // decide which confirmed attendee loses their seat.
-        findUnique.mockResolvedValue(anEventRow({ capacity: 40 }));
+        givenEvent(anEventRow({ capacity: 40 }));
         count.mockResolvedValue(10);
 
         await expect(service.update(id, { capacity: 9 })).rejects.toBeInstanceOf(
           RuleViolationError,
         );
-        expect(update).not.toHaveBeenCalled();
+        expect(txEventUpdate).not.toHaveBeenCalled();
       });
 
       it('counts only confirmed seats, not waitlisted or cancelled ones', async () => {
-        findUnique.mockResolvedValue(anEventRow({ capacity: 40 }));
+        givenEvent(anEventRow({ capacity: 40 }));
         count.mockResolvedValue(0);
-        update.mockResolvedValue(anEventRow());
+        txEventUpdate.mockResolvedValue(anEventRow());
 
         await service.update(id, { capacity: 1 });
 
@@ -558,10 +579,87 @@ describe('EventsService', () => {
       });
 
       it('says how many seats are already taken', async () => {
-        findUnique.mockResolvedValue(anEventRow({ capacity: 40 }));
+        givenEvent(anEventRow({ capacity: 40 }));
         count.mockResolvedValue(12);
 
         await expect(service.update(id, { capacity: 5 })).rejects.toThrow(/12/);
+      });
+    });
+    describe('the row lock', () => {
+      it('is taken before the event is read', async () => {
+        // Reading first and locking afterwards decides on a copy that may
+        // already be stale, which is the same mistake the registration path
+        // used to make.
+        givenEvent(anEventRow());
+        txEventUpdate.mockResolvedValue(anEventRow());
+
+        await service.update(id, { title: 'renamed' });
+
+        const lockedAt = lockEvent.mock.invocationCallOrder[0] ?? 0;
+        const readAt = findEventOrThrow.mock.invocationCallOrder[0] ?? 0;
+        expect(lockedAt).toBeLessThan(readAt);
+      });
+
+      it('raises not-found when the lock matches no event', async () => {
+        givenEvent(null);
+
+        await expect(service.update(id, { title: 'x' })).rejects.toBeInstanceOf(
+          ResourceNotFoundError,
+        );
+        expect(txEventUpdate).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('raising capacity', () => {
+      it('serves the queue, because the new seats are owed to it', async () => {
+        givenEvent(anEventRow({ capacity: 10 }));
+        txEventUpdate.mockResolvedValue(anEventRow({ capacity: 20 }));
+
+        await service.update(id, { capacity: 20 });
+
+        expect(promote).toHaveBeenCalledTimes(1);
+      });
+
+      it('promotes inside the same transaction as the capacity change', async () => {
+        // Promoting afterwards would race a registration arriving in the gap,
+        // and the newcomer would take a seat the queue had been waiting for.
+        givenEvent(anEventRow({ capacity: 10 }));
+        txEventUpdate.mockResolvedValue(anEventRow({ capacity: 20 }));
+
+        await service.update(id, { capacity: 20 });
+
+        const promotedAt = promote.mock.invocationCallOrder[0] ?? 0;
+        const lockedAt = lockEvent.mock.invocationCallOrder[0] ?? 0;
+        expect(promotedAt).toBeGreaterThan(lockedAt);
+        expect($transaction).toHaveBeenCalledTimes(1);
+      });
+
+      it('does not serve the queue when capacity is unchanged', async () => {
+        givenEvent(anEventRow({ capacity: 10 }));
+        txEventUpdate.mockResolvedValue(anEventRow({ capacity: 10 }));
+
+        await service.update(id, { capacity: 10 });
+
+        expect(promote).not.toHaveBeenCalled();
+      });
+
+      it('does not serve the queue when only unrelated fields change', async () => {
+        givenEvent(anEventRow());
+        txEventUpdate.mockResolvedValue(anEventRow({ title: 'renamed' }));
+
+        await service.update(id, { title: 'renamed' });
+
+        expect(promote).not.toHaveBeenCalled();
+      });
+
+      it('does not serve the queue when capacity is reduced', async () => {
+        givenEvent(anEventRow({ capacity: 10 }));
+        count.mockResolvedValue(2);
+        txEventUpdate.mockResolvedValue(anEventRow({ capacity: 5 }));
+
+        await service.update(id, { capacity: 5 });
+
+        expect(promote).not.toHaveBeenCalled();
       });
     });
   });

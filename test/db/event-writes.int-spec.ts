@@ -7,6 +7,7 @@ import { Test } from '@nestjs/testing';
 import { EVENT_LIMITS } from '../../src/events/event-limits';
 import { EventsService } from '../../src/events/events.service';
 import { PrismaService } from '../../src/prisma/prisma.service';
+import { WaitlistService } from '../../src/registrations/waitlist.service';
 import { createAttendee, createEvent, createRegistration, fillEvent } from '../support/factories';
 import { testPrisma } from '../support/prisma';
 
@@ -17,7 +18,11 @@ describe('event writes against a real database', () => {
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
-      providers: [EventsService, { provide: PrismaService, useValue: testPrisma() }],
+      providers: [
+        EventsService,
+        WaitlistService,
+        { provide: PrismaService, useValue: testPrisma() },
+      ],
     }).compile();
 
     service = moduleRef.get(EventsService);

@@ -5,6 +5,7 @@ import { ValidationFailedError } from '../../src/common/errors/domain-error';
 import { ListEventsQueryDto } from '../../src/events/dto/list-events-query.dto';
 import { EventsService } from '../../src/events/events.service';
 import { PrismaService } from '../../src/prisma/prisma.service';
+import { WaitlistService } from '../../src/registrations/waitlist.service';
 import { createEvent } from '../support/factories';
 import { testPrisma } from '../support/prisma';
 
@@ -30,7 +31,11 @@ describe('listing events against a real database', () => {
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
-      providers: [EventsService, { provide: PrismaService, useValue: testPrisma() }],
+      providers: [
+        EventsService,
+        WaitlistService,
+        { provide: PrismaService, useValue: testPrisma() },
+      ],
     }).compile();
 
     service = moduleRef.get(EventsService);

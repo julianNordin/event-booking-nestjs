@@ -10,6 +10,7 @@ import {
 import { mapPrismaError } from '../../src/common/filters/prisma-error.mapper';
 import { PrismaService } from '../../src/prisma/prisma.service';
 import { RegistrationsService } from '../../src/registrations/registrations.service';
+import { WaitlistService } from '../../src/registrations/waitlist.service';
 import { createAttendee, createEvent, createRegistration } from '../support/factories';
 import { testPrisma } from '../support/prisma';
 
@@ -48,6 +49,7 @@ describe('registrations against a real database', () => {
     const moduleRef = await Test.createTestingModule({
       providers: [
         RegistrationsService,
+        WaitlistService,
         { provide: PrismaService, useValue: testPrisma() },
         { provide: Clock, useValue: clock },
       ],

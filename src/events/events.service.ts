@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 
 import { PagedResponse } from '../common/dto/paged-response';
 import { clampPageSize, parseSort, SortOrder, toSkip } from '../common/dto/sort';
@@ -11,6 +11,7 @@ import {
 } from '../common/errors/domain-error';
 import type { Event as PrismaEvent, Prisma } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { WaitlistService } from '../registrations/waitlist.service';
 import { CreateEventDto } from './dto/create-event.dto';
 import { EventResponseDto } from './dto/event-response.dto';
 import { ListEventsQueryDto } from './dto/list-events-query.dto';
@@ -32,7 +33,19 @@ const DEFAULT_EVENT_SORT: SortOrder[] = [{ field: 'startsAt', direction: 'asc' }
 
 @Injectable()
 export class EventsService {
-  constructor(private readonly prisma: PrismaService) {}
+  /**
+   * Stated rather than inherited, and matching the registration path. An edit
+   * queues behind whatever registrations hold the event's lock, and Prisma's
+   * 2s default would start failing edits on the clock during a busy minute.
+   */
+  private static readonly TRANSACTION_OPTIONS = { maxWait: 5_000, timeout: 10_000 };
+
+  private readonly logger = new Logger(EventsService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly waitlist: WaitlistService,
+  ) {}
 
   async findAll(
     query: ListEventsQueryDto = new ListEventsQueryDto(),
@@ -94,86 +107,104 @@ export class EventsService {
     return toEventResponse(event);
   }
 
+  /**
+   * Edit an event, and serve the queue if the edit made room.
+   *
+   * The whole thing runs inside a transaction holding the event's row lock —
+   * the same lock registration and cancellation take. Two reasons, and the
+   * second is the one that matters:
+   *
+   * - Raising capacity frees seats, and free seats are owed to whoever is
+   *   already waiting. Promoting outside the lock would race a registration
+   *   arriving at the same moment, and the newcomer would take a seat the queue
+   *   had been waiting for.
+   * - The check that capacity is not cut below the confirmed count used to be a
+   *   read followed by a write, and therefore advisory: a registration could
+   *   land between the two. Under the lock it is not advisory any more, because
+   *   a registration cannot land in between.
+   */
   async update(id: string, dto: UpdateEventDto): Promise<EventResponseDto> {
-    const existing = await this.requireEvent(id);
+    const { updated, promoted } = await this.prisma.$transaction(async (tx) => {
+      const locked = await tx.$queryRaw<{ id: string }[]>`
+          SELECT id FROM events WHERE id = ${id}::uuid FOR UPDATE
+        `;
 
-    if (existing.status === 'CANCELLED') {
-      // Terminal in the state machine, and terminal here too. A cancelled
-      // event is the record of something that was called off; editing it
-      // rewrites what attendees were told.
-      throw new TransitionNotAllowedError(
-        'a cancelled event is the record of something called off and cannot be edited',
-        'CANCELLED',
-        'update',
-      );
+      if (locked.length === 0) {
+        throw new ResourceNotFoundError('event', id);
+      }
+
+      const existing = await tx.event.findUniqueOrThrow({ where: { id } });
+
+      if (existing.status === 'CANCELLED') {
+        throw new TransitionNotAllowedError(
+          'a cancelled event is the record of something called off and cannot be edited',
+          'CANCELLED',
+          'update',
+        );
+      }
+
+      // The schedule rules apply to the event as it will be, not to the
+      // fields that happen to be in this request. Patching only endsAt has to
+      // be checked against the stored startsAt, or an event can be walked
+      // into an invalid state one field at a time.
+      this.assertScheduleIsCoherent({
+        startsAt: dto.startsAt ?? existing.startsAt,
+        endsAt: dto.endsAt ?? existing.endsAt,
+        registrationOpensAt:
+          dto.registrationOpensAt === undefined
+            ? existing.registrationOpensAt
+            : dto.registrationOpensAt,
+        registrationClosesAt:
+          dto.registrationClosesAt === undefined
+            ? existing.registrationClosesAt
+            : dto.registrationClosesAt,
+      });
+
+      if (dto.capacity !== undefined && dto.capacity < existing.capacity) {
+        const confirmed = await tx.registration.count({
+          where: { eventId: id, status: 'CONFIRMED' },
+        });
+
+        if (dto.capacity < confirmed) {
+          throw new RuleViolationError(
+            `capacity cannot be reduced to ${String(dto.capacity)}: ${String(confirmed)} attendees already hold a confirmed seat`,
+            'capacity-covers-confirmed',
+            { requested: dto.capacity, confirmed },
+          );
+        }
+      }
+
+      const row = await tx.event.update({
+        where: { id },
+        // undefined means "leave this column alone" to Prisma and null means
+        // "set it to null", which is exactly the distinction PATCH needs: an
+        // absent field is untouched, an explicit null clears it.
+        data: {
+          title: dto.title,
+          description: dto.description,
+          venue: dto.venue,
+          startsAt: dto.startsAt,
+          endsAt: dto.endsAt,
+          capacity: dto.capacity,
+          waitlistEnabled: dto.waitlistEnabled,
+          registrationOpensAt: dto.registrationOpensAt,
+          registrationClosesAt: dto.registrationClosesAt,
+        },
+      });
+
+      const grewCapacity = dto.capacity !== undefined && dto.capacity > existing.capacity;
+
+      return {
+        updated: row,
+        promoted: grewCapacity ? await this.waitlist.promote(tx, id) : [],
+      };
+    }, EventsService.TRANSACTION_OPTIONS);
+
+    for (const registration of promoted) {
+      this.logger.log(`promoted registration ${registration.id} after capacity rose on ${id}`);
     }
-
-    // The schedule rules apply to the event as it will be, not to the fields
-    // that happen to be in this request. Patching only endsAt has to be checked
-    // against the stored startsAt, or an event can be walked into an invalid
-    // state one field at a time.
-    this.assertScheduleIsCoherent({
-      startsAt: dto.startsAt ?? existing.startsAt,
-      endsAt: dto.endsAt ?? existing.endsAt,
-      registrationOpensAt:
-        dto.registrationOpensAt === undefined
-          ? existing.registrationOpensAt
-          : dto.registrationOpensAt,
-      registrationClosesAt:
-        dto.registrationClosesAt === undefined
-          ? existing.registrationClosesAt
-          : dto.registrationClosesAt,
-    });
-
-    if (dto.capacity !== undefined && dto.capacity < existing.capacity) {
-      await this.assertCapacityCoversConfirmed(id, dto.capacity);
-    }
-
-    const updated = await this.prisma.event.update({
-      where: { id },
-      // undefined means "leave this column alone" to Prisma and null means "set
-      // it to null", which is exactly the distinction PATCH needs: an absent
-      // field is untouched, an explicit null clears it.
-      data: {
-        title: dto.title,
-        description: dto.description,
-        venue: dto.venue,
-        startsAt: dto.startsAt,
-        endsAt: dto.endsAt,
-        capacity: dto.capacity,
-        waitlistEnabled: dto.waitlistEnabled,
-        registrationOpensAt: dto.registrationOpensAt,
-        registrationClosesAt: dto.registrationClosesAt,
-      },
-    });
 
     return toEventResponse(updated);
-  }
-
-  /**
-   * Capacity may not be cut below the number of people already holding a seat.
-   *
-   * Allowing it would leave an event overbooked by construction, with no way to
-   * decide which confirmed attendee loses their place.
-   *
-   * This is a read followed by a write, so under concurrency it is advisory:
-   * a registration could land between the count and the update. That race is
-   * the small one — reducing capacity is a rare administrative act — and the
-   * authoritative protection lives on the registration path, which takes a row
-   * lock on the event.
-   */
-  private async assertCapacityCoversConfirmed(eventId: string, capacity: number): Promise<void> {
-    const confirmed = await this.prisma.registration.count({
-      where: { eventId, status: 'CONFIRMED' },
-    });
-
-    if (capacity < confirmed) {
-      throw new RuleViolationError(
-        `capacity cannot be reduced to ${String(capacity)}: ${String(confirmed)} attendees already hold a confirmed seat`,
-        'capacity-covers-confirmed',
-        { requested: capacity, confirmed },
-      );
-    }
   }
 
   publish(id: string): Promise<EventResponseDto> {

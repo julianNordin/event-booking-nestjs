@@ -11,7 +11,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CreateRegistrationDto } from './dto/create-registration.dto';
 import { RegistrationResponseDto } from './dto/registration-response.dto';
 import { decideRegistration } from './policy/registration-policy';
-import { seatsAvailable, selectForPromotion } from './policy/waitlist';
+import { WaitlistService } from './waitlist.service';
 import { toRegistrationResponse } from './registration.mapper';
 
 @Injectable()
@@ -21,6 +21,7 @@ export class RegistrationsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly clock: Clock,
+    private readonly waitlist: WaitlistService,
   ) {}
 
   /**
@@ -216,7 +217,7 @@ export class RegistrationsService {
 
       return {
         cancelled: cancelledRow,
-        promoted: await this.promote(tx, subject.eventId),
+        promoted: await this.waitlist.promote(tx, subject.eventId),
       };
     }, RegistrationsService.TRANSACTION_OPTIONS);
 
@@ -227,54 +228,6 @@ export class RegistrationsService {
     }
 
     return toRegistrationResponse(cancelled);
-  }
-
-  /**
-   * Fill whatever seats are free from the front of the queue.
-   *
-   * Must be called with the event row already locked. Everything it reads —
-   * the capacity, the confirmed count, the queue — has to be consistent with
-   * everything it writes, and outside the lock none of it is.
-   */
-  private async promote(
-    tx: Prisma.TransactionClient,
-    eventId: string,
-  ): Promise<PrismaRegistration[]> {
-    const event = await tx.event.findUniqueOrThrow({
-      where: { id: eventId },
-      select: { capacity: true, waitlistEnabled: true },
-    });
-
-    const confirmedCount = await tx.registration.count({
-      where: { eventId, status: 'CONFIRMED' },
-    });
-
-    const seats = seatsAvailable(event.capacity, confirmedCount);
-
-    if (seats === 0) {
-      return [];
-    }
-
-    const queue = await tx.registration.findMany({
-      where: { eventId, status: 'WAITLISTED' },
-      select: { id: true, waitlistPosition: true },
-    });
-
-    const chosen = selectForPromotion(queue, seats);
-    const promoted: PrismaRegistration[] = [];
-
-    // Sequentially, not in parallel: they share one transaction, and firing
-    // them at once on a single connection buys nothing but interleaving.
-    for (const entry of chosen) {
-      promoted.push(
-        await tx.registration.update({
-          where: { id: entry.id },
-          data: { status: 'CONFIRMED', waitlistPosition: null },
-        }),
-      );
-    }
-
-    return promoted;
   }
 
   private async requireRegistration(id: string): Promise<PrismaRegistration> {

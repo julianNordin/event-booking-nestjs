@@ -4,6 +4,7 @@ import { Clock, SystemClock } from '../../src/common/clock/clock.service';
 import { RuleViolationError } from '../../src/common/errors/domain-error';
 import { PrismaService } from '../../src/prisma/prisma.service';
 import { RegistrationsService } from '../../src/registrations/registrations.service';
+import { WaitlistService } from '../../src/registrations/waitlist.service';
 import { createAttendee, createEvent } from '../support/factories';
 import { testPrisma } from '../support/prisma';
 
@@ -26,6 +27,7 @@ describe('capacity under concurrent registration', () => {
     const moduleRef = await Test.createTestingModule({
       providers: [
         RegistrationsService,
+        WaitlistService,
         { provide: PrismaService, useValue: testPrisma() },
         { provide: Clock, useClass: SystemClock },
       ],

@@ -2,8 +2,10 @@ import { Test } from '@nestjs/testing';
 
 import { Clock, SystemClock } from '../../src/common/clock/clock.service';
 import { TransitionNotAllowedError } from '../../src/common/errors/domain-error';
+import { EventsService } from '../../src/events/events.service';
 import { PrismaService } from '../../src/prisma/prisma.service';
 import { RegistrationsService } from '../../src/registrations/registrations.service';
+import { WaitlistService } from '../../src/registrations/waitlist.service';
 import { createAttendee, createEvent } from '../support/factories';
 import { testPrisma } from '../support/prisma';
 
@@ -16,6 +18,7 @@ describe('waitlist promotion', () => {
     const moduleRef = await Test.createTestingModule({
       providers: [
         RegistrationsService,
+        WaitlistService,
         { provide: PrismaService, useValue: testPrisma() },
         { provide: Clock, useClass: SystemClock },
       ],
@@ -198,6 +201,90 @@ describe('waitlist promotion', () => {
       await expect(
         prisma.registration.count({ where: { eventId, status: 'CONFIRMED' } }),
       ).resolves.toBe(1);
+    });
+  });
+
+  describe('raising capacity', () => {
+    let events: EventsService;
+
+    beforeAll(async () => {
+      const moduleRef = await Test.createTestingModule({
+        providers: [
+          EventsService,
+          WaitlistService,
+          { provide: PrismaService, useValue: testPrisma() },
+        ],
+      }).compile();
+
+      events = moduleRef.get(EventsService);
+    });
+
+    it('promotes the front of the queue when one seat is added', async () => {
+      const { eventId, waiting } = await fillAndQueue(1, 2);
+
+      await events.update(eventId, { capacity: 2 });
+
+      await expect(statusOf(waiting[0]!)).resolves.toBe('CONFIRMED');
+      await expect(statusOf(waiting[1]!)).resolves.toBe('WAITLISTED');
+    });
+
+    it('promotes in ticket order when several seats are added at once', async () => {
+      // Adding three seats must take the first three, not any three.
+      const { eventId, waiting } = await fillAndQueue(1, 5);
+
+      await events.update(eventId, { capacity: 4 });
+
+      const statuses = await Promise.all(waiting.map(statusOf));
+      expect(statuses).toEqual(['CONFIRMED', 'CONFIRMED', 'CONFIRMED', 'WAITLISTED', 'WAITLISTED']);
+    });
+
+    it('promotes everyone and stops when the queue is shorter than the new seats', async () => {
+      const { eventId, waiting } = await fillAndQueue(1, 2);
+
+      await events.update(eventId, { capacity: 50 });
+
+      const statuses = await Promise.all(waiting.map(statusOf));
+      expect(statuses).toEqual(['CONFIRMED', 'CONFIRMED']);
+      await expect(
+        prisma.registration.count({ where: { eventId, status: 'WAITLISTED' } }),
+      ).resolves.toBe(0);
+    });
+
+    it('leaves the queue alone when capacity does not change', async () => {
+      const { eventId, waiting } = await fillAndQueue(1, 2);
+
+      await events.update(eventId, { title: 'Renamed but the same size' });
+
+      const statuses = await Promise.all(waiting.map(statusOf));
+      expect(statuses).toEqual(['WAITLISTED', 'WAITLISTED']);
+    });
+
+    it('never promotes past the new capacity', async () => {
+      const { eventId } = await fillAndQueue(2, 10);
+
+      await events.update(eventId, { capacity: 5 + 0 });
+
+      await expect(
+        prisma.registration.count({ where: { eventId, status: 'CONFIRMED' } }),
+      ).resolves.toBe(5);
+    });
+
+    it('does not race a registration arriving at the same moment', async () => {
+      // The capacity change and the promotion are one transaction under the
+      // event's lock, so a newcomer cannot slip into a seat that was created
+      // for the queue.
+      const { eventId, waiting } = await fillAndQueue(1, 1);
+      const newcomer = await createAttendee();
+
+      await Promise.all([
+        events.update(eventId, { capacity: 2 }),
+        service.register(eventId, { attendeeId: newcomer.id }),
+      ]);
+
+      await expect(statusOf(waiting[0]!)).resolves.toBe('CONFIRMED');
+      await expect(
+        prisma.registration.count({ where: { eventId, status: 'CONFIRMED' } }),
+      ).resolves.toBe(2);
     });
   });
 });

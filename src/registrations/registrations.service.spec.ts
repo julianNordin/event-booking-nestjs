@@ -9,6 +9,7 @@ import {
 import type { Event, Registration } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { RegistrationsService } from './registrations.service';
+import { WaitlistService } from './waitlist.service';
 
 const NOW = new Date('2027-06-01T12:00:00.000Z');
 const DAY = 24 * 60 * 60 * 1000;
@@ -62,6 +63,7 @@ describe('RegistrationsService', () => {
   const lockEvent = jest.fn();
   const findEventOrThrow = jest.fn();
   const findRegistrationOrThrow = jest.fn();
+  const promote = jest.fn();
 
   // $transaction(fn) hands the callback a client scoped to the transaction.
   // Running it immediately against a stand-in lets these tests assert what
@@ -100,6 +102,8 @@ describe('RegistrationsService', () => {
     lockEvent.mockReset();
     findEventOrThrow.mockReset();
     findRegistrationOrThrow.mockReset();
+    promote.mockReset();
+    promote.mockResolvedValue([]);
     $transaction.mockClear();
 
     aggregate.mockResolvedValue({ _max: { waitlistPosition: null } });
@@ -130,6 +134,7 @@ describe('RegistrationsService', () => {
         // Time as an ordinary argument. Every rule below is a comparison
         // against this instant, and none of them touches the real clock.
         { provide: Clock, useValue: { now: () => NOW } },
+        { provide: WaitlistService, useValue: { promote } },
       ],
     }).compile();
 
