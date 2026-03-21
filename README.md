@@ -193,7 +193,7 @@ it says nothing about whether the cost grows with the data — which is the only
 - [x] 11 — Registration: rules engine & happy path
 - [x] 12 — Capacity under concurrency
 - [x] 13 — Waitlist & promotion
-- [ ] 14 — Query performance: measure, then fix
+- [x] 14 — Query performance: measure, then fix
 - [ ] 15 — Guards, decorators, interceptors, throttling
 - [ ] 16 — End-to-end tier
 - [ ] 17 — OpenAPI, Swagger UI & health
