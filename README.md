@@ -135,7 +135,7 @@ state lives.
 - [x] 10 — Attendees
 - [x] 11 — Registration: rules engine & happy path
 - [x] 12 — Capacity under concurrency
-- [ ] 13 — Waitlist & promotion
+- [x] 13 — Waitlist & promotion
 - [ ] 14 — Query performance: measure, then fix
 - [ ] 15 — Guards, decorators, interceptors, throttling
 - [ ] 16 — End-to-end tier
