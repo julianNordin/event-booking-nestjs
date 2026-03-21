@@ -10,6 +10,7 @@ import type { Prisma, Registration as PrismaRegistration } from '../generated/pr
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateRegistrationDto } from './dto/create-registration.dto';
 import { RegistrationResponseDto } from './dto/registration-response.dto';
+import { WaitlistEntryDto } from './dto/waitlist-entry.dto';
 import { decideRegistration } from './policy/registration-policy';
 import { WaitlistService } from './waitlist.service';
 import { toRegistrationResponse } from './registration.mapper';
@@ -147,6 +148,41 @@ export class RegistrationsService {
     });
 
     return registrations.map(toRegistrationResponse);
+  }
+
+  /**
+   * The queue for an event: only the people still waiting, in the order they
+   * will be served.
+   *
+   * Distinct from the roster, which includes confirmed seats and cancellations.
+   * This is the list an organiser reads before deciding whether to find a
+   * bigger room.
+   */
+  async findWaitlist(eventId: string): Promise<WaitlistEntryDto[]> {
+    const event = await this.prisma.event.findUnique({
+      where: { id: eventId },
+      select: { id: true },
+    });
+
+    if (event === null) {
+      throw new ResourceNotFoundError('event', eventId);
+    }
+
+    const queue = await this.prisma.registration.findMany({
+      where: { eventId, status: 'WAITLISTED' },
+      orderBy: [{ waitlistPosition: { sort: 'asc', nulls: 'last' } }, { id: 'asc' }],
+    });
+
+    return queue.map((registration, index) => ({
+      // Derived from the position in this ordered list, not from the stored
+      // ticket. The two differ as soon as anybody ahead has left, and it is
+      // the place people actually want to know.
+      place: index + 1,
+      waitlistPosition: registration.waitlistPosition ?? 0,
+      registrationId: registration.id,
+      attendeeId: registration.attendeeId,
+      registeredAt: registration.registeredAt.toISOString(),
+    }));
   }
 
   async findOne(id: string): Promise<RegistrationResponseDto> {

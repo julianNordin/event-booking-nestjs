@@ -1,7 +1,10 @@
 import { Test } from '@nestjs/testing';
 
 import { Clock, SystemClock } from '../../src/common/clock/clock.service';
-import { TransitionNotAllowedError } from '../../src/common/errors/domain-error';
+import {
+  ResourceNotFoundError,
+  TransitionNotAllowedError,
+} from '../../src/common/errors/domain-error';
 import { EventsService } from '../../src/events/events.service';
 import { PrismaService } from '../../src/prisma/prisma.service';
 import { RegistrationsService } from '../../src/registrations/registrations.service';
@@ -285,6 +288,72 @@ describe('waitlist promotion', () => {
       await expect(
         prisma.registration.count({ where: { eventId, status: 'CONFIRMED' } }),
       ).resolves.toBe(2);
+    });
+  });
+
+  describe('the waitlist endpoint', () => {
+    it('raises not-found for an event that does not exist', async () => {
+      await expect(
+        service.findWaitlist('0195e3a0-0000-7000-8000-0000deadbeef'),
+      ).rejects.toBeInstanceOf(ResourceNotFoundError);
+    });
+
+    it('is empty for an event nobody is waiting for', async () => {
+      const { eventId } = await fillAndQueue(2, 0);
+
+      await expect(service.findWaitlist(eventId)).resolves.toEqual([]);
+    });
+
+    it('shows only the people still waiting, not the confirmed or the cancelled', async () => {
+      const { eventId, waiting } = await fillAndQueue(1, 3);
+      await service.cancel(waiting[1]!);
+
+      const queue = await service.findWaitlist(eventId);
+
+      expect(queue.map((entry) => entry.registrationId)).toEqual([waiting[0], waiting[2]]);
+    });
+
+    it('numbers places from one, in queue order', async () => {
+      const { eventId } = await fillAndQueue(1, 3);
+
+      const queue = await service.findWaitlist(eventId);
+
+      expect(queue.map((entry) => entry.place)).toEqual([1, 2, 3]);
+    });
+
+    it('keeps places contiguous even where tickets have gaps', async () => {
+      // Somebody in the middle leaves, so tickets 1 and 3 remain — but the
+      // person holding ticket 3 is now second in line, and that is what they
+      // are told. Renumbering the stored tickets to match would be an update
+      // of every row behind every departure.
+      const { eventId, waiting } = await fillAndQueue(1, 3);
+      await service.cancel(waiting[1]!);
+
+      const queue = await service.findWaitlist(eventId);
+
+      expect(queue.map((entry) => entry.place)).toEqual([1, 2]);
+      expect(queue.map((entry) => entry.waitlistPosition)).toEqual([1, 3]);
+    });
+
+    it('moves everyone up a place when the front of the queue is promoted', async () => {
+      const { eventId, confirmed, waiting } = await fillAndQueue(1, 3);
+
+      await service.cancel(confirmed[0]!);
+
+      const queue = await service.findWaitlist(eventId);
+
+      expect(queue.map((entry) => entry.registrationId)).toEqual([waiting[1], waiting[2]]);
+      expect(queue.map((entry) => entry.place)).toEqual([1, 2]);
+    });
+
+    it('reports who is waiting and since when', async () => {
+      const { eventId, waiting } = await fillAndQueue(1, 1);
+
+      const [entry] = await service.findWaitlist(eventId);
+      const stored = await prisma.registration.findUniqueOrThrow({ where: { id: waiting[0]! } });
+
+      expect(entry?.attendeeId).toBe(stored.attendeeId);
+      expect(entry?.registeredAt).toBe(stored.registeredAt.toISOString());
     });
   });
 });
