@@ -275,7 +275,10 @@ describe('EventsController', () => {
         .send({ title: 'Renamed' })
         .expect(200);
 
-      expect(update).toHaveBeenCalledWith(V7_ID, { title: 'Renamed' });
+      // The third argument is the organiser. This spec builds no guard, so
+      // nobody is resolved and @Organiser() yields undefined — which is exactly
+      // what a public route would pass too.
+      expect(update).toHaveBeenCalledWith(V7_ID, { title: 'Renamed' }, undefined);
     });
 
     it('accepts an empty body as a no-op rather than rejecting it', async () => {
@@ -321,7 +324,7 @@ describe('EventsController', () => {
         .expect(200);
 
       expect(response.body).toMatchObject({ status: 'PUBLISHED' });
-      expect(publish).toHaveBeenCalledWith(V7_ID);
+      expect(publish).toHaveBeenCalledWith(V7_ID, undefined);
     });
 
     it('POST /events/:id/cancel returns 200 and the updated event', async () => {
@@ -332,7 +335,7 @@ describe('EventsController', () => {
         .expect(200);
 
       expect(response.body).toMatchObject({ status: 'CANCELLED' });
-      expect(cancel).toHaveBeenCalledWith(V7_ID);
+      expect(cancel).toHaveBeenCalledWith(V7_ID, undefined);
     });
 
     it('surfaces a refused transition as 409', async () => {
@@ -357,7 +360,7 @@ describe('EventsController', () => {
         .expect(204);
 
       expect(response.body).toEqual({});
-      expect(remove).toHaveBeenCalledWith(V7_ID);
+      expect(remove).toHaveBeenCalledWith(V7_ID, undefined);
     });
 
     it('surfaces a refused delete as 409 with its reason', async () => {

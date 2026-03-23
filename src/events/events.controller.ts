@@ -16,7 +16,9 @@ import {
 // what to inject, not the reflected metadata.
 import type { Response } from 'express';
 
+import { Organiser } from '../common/decorators/organiser.decorator';
 import { Public } from '../common/decorators/public.decorator';
+import type { OrganiserIdentity } from '../config/security.config';
 import { GLOBAL_PREFIX } from '../config/app.config';
 import { CreateEventDto } from './dto/create-event.dto';
 import { ListEventsQueryDto } from './dto/list-events-query.dto';
@@ -46,12 +48,13 @@ export class EventsController {
   @HttpCode(HttpStatus.CREATED)
   async create(
     @Body() dto: CreateEventDto,
+    @Organiser() organiser: OrganiserIdentity,
     // passthrough: true keeps Nest in charge of serialising the body. Without
     // it, taking the response object makes the handler responsible for sending
     // everything, and the returned DTO is silently never written.
     @Res({ passthrough: true }) response: Response,
   ): Promise<EventResponseDto> {
-    const event = await this.events.create(dto);
+    const event = await this.events.create(dto, organiser);
 
     // 201 without a Location header tells the client something was created and
     // refuses to say where.
@@ -75,8 +78,9 @@ export class EventsController {
   update(
     @Param('id', new ParseUUIDPipe({ version: '7' })) id: string,
     @Body() dto: UpdateEventDto,
+    @Organiser() organiser: OrganiserIdentity,
   ): Promise<EventResponseDto> {
-    return this.events.update(id, dto);
+    return this.events.update(id, dto, organiser);
   }
 
   // Publish and cancel are POSTs to named sub-resources rather than a PATCH of
@@ -85,19 +89,28 @@ export class EventsController {
   // A verb the client can name is honest about that; PATCH { status } is not.
   @Post(':id/publish')
   @HttpCode(HttpStatus.OK)
-  publish(@Param('id', new ParseUUIDPipe({ version: '7' })) id: string): Promise<EventResponseDto> {
-    return this.events.publish(id);
+  publish(
+    @Param('id', new ParseUUIDPipe({ version: '7' })) id: string,
+    @Organiser() organiser: OrganiserIdentity,
+  ): Promise<EventResponseDto> {
+    return this.events.publish(id, organiser);
   }
 
   @Post(':id/cancel')
   @HttpCode(HttpStatus.OK)
-  cancel(@Param('id', new ParseUUIDPipe({ version: '7' })) id: string): Promise<EventResponseDto> {
-    return this.events.cancel(id);
+  cancel(
+    @Param('id', new ParseUUIDPipe({ version: '7' })) id: string,
+    @Organiser() organiser: OrganiserIdentity,
+  ): Promise<EventResponseDto> {
+    return this.events.cancel(id, organiser);
   }
 
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
-  remove(@Param('id', new ParseUUIDPipe({ version: '7' })) id: string): Promise<void> {
-    return this.events.remove(id);
+  remove(
+    @Param('id', new ParseUUIDPipe({ version: '7' })) id: string,
+    @Organiser() organiser: OrganiserIdentity,
+  ): Promise<void> {
+    return this.events.remove(id, organiser);
   }
 }

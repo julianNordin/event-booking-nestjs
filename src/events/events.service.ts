@@ -11,6 +11,7 @@ import {
 } from '../common/errors/domain-error';
 import type { Event as PrismaEvent, Prisma } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import type { OrganiserIdentity } from '../config/security.config';
 import { WaitlistService } from '../registrations/waitlist.service';
 import { CreateEventDto } from './dto/create-event.dto';
 import { EventResponseDto } from './dto/event-response.dto';
@@ -44,6 +45,23 @@ export class EventsService {
   private static readonly TRANSACTION_OPTIONS = { maxWait: 5_000, timeout: 10_000 };
 
   private readonly logger = new Logger(EventsService.name);
+
+  /**
+   * Records who changed an event, and how.
+   *
+   * The organiser identity comes from the guard by way of `@Organiser()`, so
+   * every state change on an event is attributable. It is written to the log
+   * and never to a response: which organiser owns an event is not something the
+   * public listing should disclose.
+   *
+   * The actor is optional in this signature and always supplied by the
+   * controller. Optional because the service is also reachable from a seed
+   * script and from tests, where there is no organiser and inventing one would
+   * put a fictional name in an audit trail.
+   */
+  private audit(action: string, eventId: string, actor?: OrganiserIdentity): void {
+    this.logger.log(`event ${eventId} ${action} by ${actor?.name ?? 'an unattributed caller'}`);
+  }
 
   constructor(
     private readonly prisma: PrismaService,
@@ -92,7 +110,7 @@ export class EventsService {
     return toEventResponse(event, await this.countsFor(id));
   }
 
-  async create(dto: CreateEventDto): Promise<EventResponseDto> {
+  async create(dto: CreateEventDto, actor?: OrganiserIdentity): Promise<EventResponseDto> {
     this.assertScheduleIsCoherent(dto);
 
     const event = await this.prisma.event.create({
@@ -114,6 +132,8 @@ export class EventsService {
       },
     });
 
+    this.audit('created', event.id, actor);
+
     // A brand-new event holds nothing, so this needs no queries to establish.
     return toEventResponse(event, { confirmed: 0, waitlisted: 0 });
   }
@@ -134,7 +154,11 @@ export class EventsService {
    *   land between the two. Under the lock it is not advisory any more, because
    *   a registration cannot land in between.
    */
-  async update(id: string, dto: UpdateEventDto): Promise<EventResponseDto> {
+  async update(
+    id: string,
+    dto: UpdateEventDto,
+    actor?: OrganiserIdentity,
+  ): Promise<EventResponseDto> {
     const { updated, promoted } = await this.prisma.$transaction(async (tx) => {
       const locked = await tx.$queryRaw<{ id: string }[]>`
           SELECT id FROM events WHERE id = ${id}::uuid FOR UPDATE
@@ -213,19 +237,20 @@ export class EventsService {
 
     // After the commit, never inside it.
     this.waitlist.announce(promoted);
+    this.audit('updated', id, actor);
 
     return toEventResponse(updated, await this.countsFor(updated.id));
   }
 
-  publish(id: string): Promise<EventResponseDto> {
-    return this.runAction(id, 'publish');
+  publish(id: string, actor?: OrganiserIdentity): Promise<EventResponseDto> {
+    return this.runAction(id, 'publish', actor);
   }
 
-  cancel(id: string): Promise<EventResponseDto> {
-    return this.runAction(id, 'cancel');
+  cancel(id: string, actor?: OrganiserIdentity): Promise<EventResponseDto> {
+    return this.runAction(id, 'cancel', actor);
   }
 
-  async remove(id: string): Promise<void> {
+  async remove(id: string, actor?: OrganiserIdentity): Promise<void> {
     const existing = await this.requireEvent(id);
     const outcome = canDelete(existing.status);
 
@@ -234,6 +259,7 @@ export class EventsService {
     }
 
     await this.prisma.event.delete({ where: { id } });
+    this.audit('deleted', id, actor);
   }
 
   /**
@@ -244,7 +270,11 @@ export class EventsService {
    * covered without a database, leaving these tests to cover only the parts
    * that genuinely need one.
    */
-  private async runAction(id: string, action: EventAction): Promise<EventResponseDto> {
+  private async runAction(
+    id: string,
+    action: EventAction,
+    actor?: OrganiserIdentity,
+  ): Promise<EventResponseDto> {
     const existing = await this.requireEvent(id);
     const outcome = applyAction(existing.status, action);
 
@@ -257,6 +287,8 @@ export class EventsService {
         where: { id },
         data: { status: outcome.to },
       });
+
+      this.audit(`${action}ed`, id, actor);
 
       return toEventResponse(updated, await this.countsFor(updated.id));
     }
@@ -280,6 +312,8 @@ export class EventsService {
 
       return tx.event.update({ where: { id }, data: { status: 'CANCELLED' } });
     });
+
+    this.audit('cancelled', id, actor);
 
     return toEventResponse(updated, await this.countsFor(updated.id));
   }
