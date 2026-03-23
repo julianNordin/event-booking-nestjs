@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import type { Response } from 'express';
 
+import { Public } from '../common/decorators/public.decorator';
 import { GLOBAL_PREFIX } from '../config/app.config';
 import { CreateRegistrationDto } from './dto/create-registration.dto';
 import { RegistrationResponseDto } from './dto/registration-response.dto';
@@ -27,6 +28,8 @@ import { RegistrationsService } from './registrations.service';
 export class EventRegistrationsController {
   constructor(private readonly registrations: RegistrationsService) {}
 
+  // Signing up is the public action. It is rate limited instead of keyed.
+  @Public()
   @Post()
   @HttpCode(HttpStatus.CREATED)
   async register(
@@ -43,6 +46,10 @@ export class EventRegistrationsController {
     return registration;
   }
 
+  /**
+   * Organiser only, deliberately. The roster names every attendee on an event,
+   * which is the organiser's data and nobody else's.
+   */
   @Get()
   findAll(
     @Param('eventId', new ParseUUIDPipe({ version: '7' })) eventId: string,

@@ -1,5 +1,6 @@
 import { Controller, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Post } from '@nestjs/common';
 
+import { Public } from '../common/decorators/public.decorator';
 import { RegistrationResponseDto } from './dto/registration-response.dto';
 import { RegistrationsService } from './registrations.service';
 
@@ -11,6 +12,7 @@ import { RegistrationsService } from './registrations.service';
  * this route, and a client holding a registration id should not have to
  * remember which event it belonged to in order to cancel it.
  */
+@Public()
 @Controller('registrations')
 export class RegistrationsController {
   constructor(private readonly registrations: RegistrationsService) {}

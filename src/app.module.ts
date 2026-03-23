@@ -1,11 +1,14 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { EventEmitterModule } from '@nestjs/event-emitter';
+import { APP_GUARD } from '@nestjs/core';
 
 import { AttendeesModule } from './attendees/attendees.module';
 import { ClockModule } from './common/clock/clock.module';
 import { appConfig } from './config/app.config';
 import { databaseConfig } from './config/database.config';
+import { securityConfig } from './config/security.config';
+import { ApiKeyGuard } from './common/guards/api-key.guard';
 import { validateEnv } from './config/env.validation';
 import { EventsModule } from './events/events.module';
 import { PrismaModule } from './prisma/prisma.module';
@@ -20,7 +23,7 @@ import { RegistrationsModule } from './registrations/registrations.module';
       // hot path of every request.
       cache: true,
       expandVariables: true,
-      load: [appConfig, databaseConfig],
+      load: [appConfig, databaseConfig, securityConfig],
       validate: validateEnv,
     }),
     EventEmitterModule.forRoot(),
@@ -31,6 +34,11 @@ import { RegistrationsModule } from './registrations/registrations.module';
     RegistrationsModule,
   ],
   controllers: [],
-  providers: [],
+  providers: [
+    // Global and fail-closed: every route needs a key unless it is marked
+    // @Public(). A new endpoint added without thinking about auth is therefore
+    // unreachable rather than unprotected.
+    { provide: APP_GUARD, useClass: ApiKeyGuard },
+  ],
 })
 export class AppModule {}

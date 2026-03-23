@@ -84,6 +84,20 @@ export class ValidationFailedError extends DomainError {
   }
 }
 
+/**
+ * No usable credential was presented.
+ *
+ * Deliberately says nothing about *why*. Telling a caller that their key was
+ * recognised-but-wrong, as opposed to absent, confirms that a string they found
+ * somewhere is a real key — which is exactly what somebody probing the API
+ * wants to learn.
+ */
+export class UnauthorizedError extends DomainError {
+  readonly problemType = `${TYPE_PREFIX}:unauthorized`;
+  readonly title = 'Authentication is required';
+  readonly status = 401;
+}
+
 /** A state machine refused the transition that was asked for. */
 export class TransitionNotAllowedError extends DomainError {
   readonly problemType = `${TYPE_PREFIX}:transition-not-allowed`;

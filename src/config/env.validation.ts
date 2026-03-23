@@ -48,6 +48,34 @@ export class EnvironmentVariables {
   @Min(1)
   @Max(100)
   DATABASE_POOL_MAX = 10;
+
+  /**
+   * Who may write, as `name:key` pairs separated by commas.
+   *
+   * Required, with no default and no empty fallback. That is the fail-closed
+   * choice made explicit: a service that starts without knowing who is allowed
+   * to create events is a service that either rejects everybody or accepts
+   * everybody, and the second one is how it usually goes.
+   */
+  @IsString()
+  @Matches(/^[\w-]+:[^,\s]+(?:,[\w-]+:[^,\s]+)*$/, {
+    message: 'API_KEYS must be a comma-separated list of name:key pairs',
+  })
+  API_KEYS!: string;
+
+  /** Requests allowed per window on the public write endpoints. */
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(10_000)
+  THROTTLE_LIMIT = 10;
+
+  /** The throttling window, in milliseconds. */
+  @Type(() => Number)
+  @IsInt()
+  @Min(1_000)
+  @Max(3_600_000)
+  THROTTLE_TTL_MS = 60_000;
 }
 
 export class EnvironmentValidationError extends Error {

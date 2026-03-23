@@ -5,7 +5,11 @@ const valid = {
   PORT: '3000',
   DATABASE_URL: 'postgresql://events:events@localhost:5432/events',
   DATABASE_POOL_MAX: '20',
+  API_KEYS: 'stockholm-tech:sk_test_abc,malmo-events:sk_test_def',
 };
+
+/** The smallest environment this service is allowed to boot with. */
+const minimal = { DATABASE_URL: valid.DATABASE_URL, API_KEYS: valid.API_KEYS };
 
 describe('validateEnv', () => {
   describe('when the environment is complete and well formed', () => {
@@ -28,7 +32,7 @@ describe('validateEnv', () => {
     });
 
     it('applies defaults for the optional variables', () => {
-      const env = validateEnv({ DATABASE_URL: valid.DATABASE_URL });
+      const env = validateEnv(minimal);
 
       expect(env.NODE_ENV).toBe(NodeEnv.Development);
       expect(env.PORT).toBe(3000);
@@ -36,8 +40,12 @@ describe('validateEnv', () => {
     });
 
     it('accepts both the postgres:// and postgresql:// schemes', () => {
-      expect(() => validateEnv({ DATABASE_URL: 'postgres://u:p@db:5432/events' })).not.toThrow();
-      expect(() => validateEnv({ DATABASE_URL: 'postgresql://u:p@db:5432/events' })).not.toThrow();
+      expect(() =>
+        validateEnv({ ...minimal, DATABASE_URL: 'postgres://u:p@db:5432/events' }),
+      ).not.toThrow();
+      expect(() =>
+        validateEnv({ ...minimal, DATABASE_URL: 'postgresql://u:p@db:5432/events' }),
+      ).not.toThrow();
     });
   });
 
@@ -100,7 +108,7 @@ describe('validateEnv', () => {
         expect(error).toBeInstanceOf(EnvironmentValidationError);
         const { failures } = error as EnvironmentValidationError;
         const named = new Set(failures.map((failure) => failure.split(' ')[0]));
-        expect(named).toEqual(new Set(['NODE_ENV', 'PORT', 'DATABASE_URL']));
+        expect(named).toEqual(new Set(['NODE_ENV', 'PORT', 'DATABASE_URL', 'API_KEYS']));
       }
     });
   });

@@ -16,6 +16,7 @@ import {
 // what to inject, not the reflected metadata.
 import type { Response } from 'express';
 
+import { Public } from '../common/decorators/public.decorator';
 import { GLOBAL_PREFIX } from '../config/app.config';
 import { CreateEventDto } from './dto/create-event.dto';
 import { ListEventsQueryDto } from './dto/list-events-query.dto';
@@ -34,6 +35,8 @@ import { EventsService } from './events.service';
 export class EventsController {
   constructor(private readonly events: EventsService) {}
 
+  // Browsing what is on is the point of a public events API.
+  @Public()
   @Get()
   findAll(@Query() query: ListEventsQueryDto): Promise<PagedResponse<EventResponseDto>> {
     return this.events.findAll(query);
@@ -57,6 +60,7 @@ export class EventsController {
     return event;
   }
 
+  @Public()
   @Get(':id')
   findOne(
     // version 7 specifically, because that is what this schema generates.
