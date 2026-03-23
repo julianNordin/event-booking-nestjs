@@ -1,13 +1,14 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { EventEmitterModule } from '@nestjs/event-emitter';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
 
 import { AttendeesModule } from './attendees/attendees.module';
 import { ClockModule } from './common/clock/clock.module';
 import { appConfig } from './config/app.config';
 import { databaseConfig } from './config/database.config';
-import { securityConfig } from './config/security.config';
+import { securityConfig, type SecurityConfig } from './config/security.config';
 import { ApiKeyGuard } from './common/guards/api-key.guard';
 import { validateEnv } from './config/env.validation';
 import { EventsModule } from './events/events.module';
@@ -27,6 +28,15 @@ import { RegistrationsModule } from './registrations/registrations.module';
       validate: validateEnv,
     }),
     EventEmitterModule.forRoot(),
+
+    // Configured from the validated environment rather than hard-coded, so the
+    // limit can be tightened in production without a redeploy of new code.
+    ThrottlerModule.forRootAsync({
+      inject: [securityConfig.KEY],
+      useFactory: (security: SecurityConfig) => [
+        { ttl: security.throttleTtlMs, limit: security.throttleLimit },
+      ],
+    }),
     ClockModule,
     PrismaModule,
     EventsModule,

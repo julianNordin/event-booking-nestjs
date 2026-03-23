@@ -2,6 +2,7 @@ import type { Server } from 'node:http';
 
 import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
+import { ThrottlerModule } from '@nestjs/throttler';
 import request from 'supertest';
 
 import { ResourceNotFoundError } from '../common/errors/domain-error';
@@ -31,6 +32,10 @@ describe('AttendeesController', () => {
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
+      // The create route is throttled, so its guard needs the module's providers.
+      // A deliberately high limit here: these tests are about the controller,
+      // and the throttling itself is covered in its own spec.
+      imports: [ThrottlerModule.forRoot([{ ttl: 60_000, limit: 10_000 }])],
       controllers: [AttendeesController],
       providers: [{ provide: AttendeesService, useValue: { create, findOne, findRegistrations } }],
     }).compile();

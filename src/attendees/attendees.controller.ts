@@ -8,8 +8,11 @@ import {
   ParseUUIDPipe,
   Post,
   Res,
+  UseGuards,
 } from '@nestjs/common';
 import type { Response } from 'express';
+
+import { ThrottlerGuard } from '@nestjs/throttler';
 
 import { Public } from '../common/decorators/public.decorator';
 import { GLOBAL_PREFIX } from '../config/app.config';
@@ -28,6 +31,9 @@ import { CreateAttendeeDto } from './dto/create-attendee.dto';
 export class AttendeesController {
   constructor(private readonly attendees: AttendeesService) {}
 
+  // Unauthenticated and it creates rows, so it is rate limited for the same
+  // reason registration is.
+  @UseGuards(ThrottlerGuard)
   @Post()
   @HttpCode(HttpStatus.CREATED)
   async create(
