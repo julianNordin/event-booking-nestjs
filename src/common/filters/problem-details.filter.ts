@@ -3,6 +3,7 @@ import { HttpAdapterHost } from '@nestjs/core';
 
 import { ProblemDetailDto } from '../dto/problem-detail.dto';
 import { DomainError } from '../errors/domain-error';
+import { REQUEST_ID_KEY } from '../interceptors/logging.interceptor';
 import { mapPrismaError } from './prisma-error.mapper';
 
 const TYPE_PREFIX = 'urn:problem-type:event-booking';
@@ -43,6 +44,15 @@ export class ProblemDetailsFilter implements ExceptionFilter {
     const response: unknown = context.getResponse();
 
     const problem = this.toProblem(exception, httpAdapter.getRequestUrl(request) as string);
+
+    // Carried into the body so a caller can quote one string in a support
+    // ticket and have it found in the logs. It is the interceptor's id, so the
+    // two sides of the same request agree.
+    const requestId = (request as { [REQUEST_ID_KEY]?: string })[REQUEST_ID_KEY];
+
+    if (requestId !== undefined) {
+      problem[REQUEST_ID_KEY] = requestId;
+    }
 
     if (problem.status >= 500) {
       // The only place the original is recorded. It goes to the log, where an

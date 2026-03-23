@@ -3,6 +3,7 @@ import { HttpAdapterHost } from '@nestjs/core';
 import type { ValidationError } from 'class-validator';
 
 import { ProblemDetailsFilter } from './common/filters/problem-details.filter';
+import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
 import { ValidationFailedError } from './common/errors/domain-error';
 import { toFieldErrors } from './common/errors/validation-errors';
 
@@ -43,6 +44,10 @@ export function configureApp(app: INestApplication): INestApplication {
         new ValidationFailedError(toFieldErrors(errors)),
     }),
   );
+
+  // Before the filter, so a failed request still gets its id assigned and
+  // echoed — the trace is most wanted precisely when something went wrong.
+  app.useGlobalInterceptors(new LoggingInterceptor());
 
   // Registered through HttpAdapterHost rather than by grabbing the Express
   // response, so it works on whichever adapter the app is running on.
