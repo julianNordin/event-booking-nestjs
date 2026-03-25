@@ -33,6 +33,13 @@ export default async function globalSetup(): Promise<void> {
   process.env.API_KEYS ??= 'stockholm-tech:sk_test_stockholm,malmo-events:sk_test_malmo';
   process.env.NODE_ENV ??= 'test';
 
+  // The throttler is still installed and still running in the end-to-end tier —
+  // this raises its limit, it does not remove it. A journey suite makes dozens
+  // of calls from one address in a few seconds, which is exactly the traffic
+  // the production limit exists to refuse. The limit itself is proved in
+  // src/common/guards/throttling.spec.ts, which sets a low one deliberately.
+  process.env.THROTTLE_LIMIT ??= '10000';
+
   // `migrate deploy`, never `db push`. Deploy replays the migration history
   // verbatim, which is the only way the partial index, the functional index and
   // the two CHECK constraints exist in the test database at all — db push
