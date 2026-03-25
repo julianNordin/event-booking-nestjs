@@ -27,6 +27,12 @@ export default async function globalSetup(): Promise<void> {
   // it. The test Prisma client reads the same variable.
   process.env.DATABASE_URL = databaseUrl;
 
+  // The end-to-end tier boots the real AppModule, whose config validator
+  // demands these. Set here rather than in a .env so the suite is
+  // self-contained and cannot pick up a developer's real keys.
+  process.env.API_KEYS ??= 'stockholm-tech:sk_test_stockholm,malmo-events:sk_test_malmo';
+  process.env.NODE_ENV ??= 'test';
+
   // `migrate deploy`, never `db push`. Deploy replays the migration history
   // verbatim, which is the only way the partial index, the functional index and
   // the two CHECK constraints exist in the test database at all — db push
