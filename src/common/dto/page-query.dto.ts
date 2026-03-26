@@ -1,3 +1,4 @@
+import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { IsInt, IsOptional, IsString, Min } from 'class-validator';
 
@@ -15,6 +16,7 @@ export const DEFAULT_PAGE_SIZE = 20;
 export const MAX_PAGE_SIZE = 100;
 
 export class PageQueryDto {
+  @ApiPropertyOptional({ minimum: 1, default: 1, description: '1-based.' })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -26,6 +28,11 @@ export class PageQueryDto {
    * not refused. Zero and negatives are still rejected: those are malformed
    * rather than merely ambitious.
    */
+  @ApiPropertyOptional({
+    minimum: 1,
+    default: DEFAULT_PAGE_SIZE,
+    description: `Clamped to ${String(MAX_PAGE_SIZE)}. Asking for more is not an error.`,
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -39,6 +46,10 @@ export class PageQueryDto {
    * so that every caller of the service is covered and not merely every caller
    * that arrives over HTTP.
    */
+  @ApiPropertyOptional({
+    description: '`field` or `field,asc` / `field,desc`, against a per-resource whitelist.',
+    example: 'startsAt,desc',
+  })
   @IsOptional()
   @IsString()
   sort?: string;

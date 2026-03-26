@@ -1,3 +1,4 @@
+import { ApiProperty } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import { IsEmail, IsString, MaxLength, MinLength } from 'class-validator';
 
@@ -19,11 +20,18 @@ const normaliseEmail = ({ value }: { value: unknown }): unknown =>
   typeof value === 'string' ? value.trim().toLowerCase() : value;
 
 export class CreateAttendeeDto {
+  @ApiProperty({
+    format: 'email',
+    maxLength: ATTENDEE_LIMITS.email,
+    description: 'Trimmed and lower-cased before it is stored.',
+    example: 'ada@example.com',
+  })
   @Transform(normaliseEmail)
   @IsEmail({}, { message: 'email must be a valid email address' })
   @MaxLength(ATTENDEE_LIMITS.email)
   email!: string;
 
+  @ApiProperty({ maxLength: ATTENDEE_LIMITS.name, example: 'Ada Lindqvist' })
   @Transform(({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
   @MinLength(1)

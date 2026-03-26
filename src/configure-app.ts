@@ -8,6 +8,7 @@ import { ValidationFailedError } from './common/errors/domain-error';
 import { toFieldErrors } from './common/errors/validation-errors';
 
 import { GLOBAL_PREFIX } from './config/app.config';
+import { setupOpenApi } from './openapi';
 
 /**
  * Everything that turns a bare Nest application into *this* application.
@@ -52,6 +53,11 @@ export function configureApp(app: INestApplication): INestApplication {
   // Registered through HttpAdapterHost rather than by grabbing the Express
   // response, so it works on whichever adapter the app is running on.
   app.useGlobalFilters(new ProblemDetailsFilter(app.get(HttpAdapterHost)));
+
+  // Mounted here rather than in main.ts so the end-to-end tier documents the
+  // same application it tests — a spec generated from a different assembly is
+  // a spec for a different API.
+  setupOpenApi(app);
 
   // Nest only forwards SIGTERM and friends to onModuleDestroy/onApplicationShutdown
   // once this is called. Without it a container restart drops the connection

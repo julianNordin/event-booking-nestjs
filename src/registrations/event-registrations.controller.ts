@@ -12,7 +12,23 @@ import {
 } from '@nestjs/common';
 import type { Response } from 'express';
 
+import {
+  ApiCreatedResponse,
+  ApiOkResponse,
+  ApiOperation,
+  ApiSecurity,
+  ApiTags,
+} from '@nestjs/swagger';
 import { ThrottlerGuard } from '@nestjs/throttler';
+
+import {
+  ApiProblemBadRequest,
+  ApiProblemConflict,
+  ApiProblemNotFound,
+  ApiProblemTooManyRequests,
+  ApiProblemUnauthorized,
+} from '../common/decorators/api-problem-response.decorator';
+import { ORGANISER_KEY_SCHEME } from '../openapi';
 
 import { Public } from '../common/decorators/public.decorator';
 import { GLOBAL_PREFIX } from '../config/app.config';
@@ -27,6 +43,7 @@ import { RegistrationsService } from './registrations.service';
  * the request — it is what the request is *about*, and a body field would make
  * `POST /events/A/registrations {eventId: B}` a question with two answers.
  */
+@ApiTags('registrations')
 @Controller('events/:eventId/registrations')
 export class EventRegistrationsController {
   constructor(private readonly registrations: RegistrationsService) {}
@@ -42,6 +59,20 @@ export class EventRegistrationsController {
    * an event overbooking. This stops one caller consuming the whole queue's
    * worth of attempts before anybody else gets a look in.
    */
+  @ApiOperation({
+    summary: 'Register for an event',
+    description:
+      'Confirms a seat if there is one, otherwise joins the waitlist. Capacity is enforced ' +
+      'under a row lock, so an event cannot overbook however many requests arrive at once.',
+  })
+  @ApiCreatedResponse({
+    type: RegistrationResponseDto,
+    description: 'CONFIRMED, or WAITLISTED with a position.',
+  })
+  @ApiProblemBadRequest()
+  @ApiProblemNotFound('No such event, or no such attendee.')
+  @ApiProblemConflict('Already registered, event full with no waitlist, closed, or cancelled.')
+  @ApiProblemTooManyRequests()
   @Public()
   @UseGuards(ThrottlerGuard)
   @Post()
@@ -64,6 +95,17 @@ export class EventRegistrationsController {
    * Organiser only, deliberately. The roster names every attendee on an event,
    * which is the organiser's data and nobody else's.
    */
+  @ApiOperation({
+    summary: "An event's roster",
+    description: 'Confirmed first, then the queue in order, then cancellations.',
+  })
+  @ApiSecurity(ORGANISER_KEY_SCHEME)
+  @ApiOkResponse({
+    type: [RegistrationResponseDto],
+    description: 'Everyone attached to the event.',
+  })
+  @ApiProblemUnauthorized()
+  @ApiProblemNotFound()
   @Get()
   findAll(
     @Param('eventId', new ParseUUIDPipe({ version: '7' })) eventId: string,

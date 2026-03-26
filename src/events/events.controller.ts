@@ -16,12 +16,29 @@ import {
 // what to inject, not the reflected metadata.
 import type { Response } from 'express';
 
+import {
+  ApiCreatedResponse,
+  ApiNoContentResponse,
+  ApiOkResponse,
+  ApiOperation,
+  ApiSecurity,
+  ApiTags,
+} from '@nestjs/swagger';
+
+import {
+  ApiProblemBadRequest,
+  ApiProblemConflict,
+  ApiProblemNotFound,
+  ApiProblemUnauthorized,
+} from '../common/decorators/api-problem-response.decorator';
 import { Organiser } from '../common/decorators/organiser.decorator';
 import { Public } from '../common/decorators/public.decorator';
 import type { OrganiserIdentity } from '../config/security.config';
 import { GLOBAL_PREFIX } from '../config/app.config';
 import { CreateEventDto } from './dto/create-event.dto';
 import { ListEventsQueryDto } from './dto/list-events-query.dto';
+import { PagedEventsDto } from './dto/paged-events.dto';
+import { ORGANISER_KEY_SCHEME } from '../openapi';
 import { UpdateEventDto } from './dto/update-event.dto';
 
 import { PagedResponse } from '../common/dto/paged-response';
@@ -33,17 +50,29 @@ import { EventsService } from './events.service';
  * entire job is to turn a request into a service call and a DTO into a
  * response, which is what keeps the service independently testable.
  */
+@ApiTags('events')
 @Controller('events')
 export class EventsController {
   constructor(private readonly events: EventsService) {}
 
   // Browsing what is on is the point of a public events API.
   @Public()
+  @ApiOperation({ summary: 'List events', description: 'Paged, filterable and searchable.' })
+  @ApiOkResponse({ type: PagedEventsDto, description: 'One page of events.' })
+  @ApiProblemBadRequest('An unknown query parameter, or a sort field that is not whitelisted.')
   @Get()
   findAll(@Query() query: ListEventsQueryDto): Promise<PagedResponse<EventResponseDto>> {
     return this.events.findAll(query);
   }
 
+  @ApiOperation({
+    summary: 'Create an event',
+    description: 'Always created as a DRAFT. Status changes go through publish and cancel.',
+  })
+  @ApiSecurity(ORGANISER_KEY_SCHEME)
+  @ApiCreatedResponse({ type: EventResponseDto, description: 'Created. See the Location header.' })
+  @ApiProblemBadRequest()
+  @ApiProblemUnauthorized()
   @Post()
   @HttpCode(HttpStatus.CREATED)
   async create(
@@ -64,6 +93,10 @@ export class EventsController {
   }
 
   @Public()
+  @ApiOperation({ summary: 'Read one event' })
+  @ApiOkResponse({ type: EventResponseDto, description: 'The event.' })
+  @ApiProblemBadRequest('The id is not a version 7 uuid.')
+  @ApiProblemNotFound('No event with that id.')
   @Get(':id')
   findOne(
     // version 7 specifically, because that is what this schema generates.
@@ -74,6 +107,13 @@ export class EventsController {
     return this.events.findOne(id);
   }
 
+  @ApiOperation({ summary: 'Edit an event', description: 'Absent fields are left alone.' })
+  @ApiSecurity(ORGANISER_KEY_SCHEME)
+  @ApiOkResponse({ type: EventResponseDto, description: 'The event as it now stands.' })
+  @ApiProblemBadRequest()
+  @ApiProblemUnauthorized()
+  @ApiProblemNotFound()
+  @ApiProblemConflict('The event is cancelled, or capacity would drop below the confirmed count.')
   @Patch(':id')
   update(
     @Param('id', new ParseUUIDPipe({ version: '7' })) id: string,
@@ -87,6 +127,12 @@ export class EventsController {
   // the status field. They are not field assignments — each one runs a rule
   // that can refuse, and cancelling additionally cancels every registration.
   // A verb the client can name is honest about that; PATCH { status } is not.
+  @ApiOperation({ summary: 'Publish a draft event' })
+  @ApiSecurity(ORGANISER_KEY_SCHEME)
+  @ApiOkResponse({ type: EventResponseDto, description: 'The event, now PUBLISHED.' })
+  @ApiProblemUnauthorized()
+  @ApiProblemNotFound()
+  @ApiProblemConflict('Already published, or cancelled and therefore terminal.')
   @Post(':id/publish')
   @HttpCode(HttpStatus.OK)
   publish(
@@ -96,6 +142,15 @@ export class EventsController {
     return this.events.publish(id, organiser);
   }
 
+  @ApiOperation({
+    summary: 'Cancel an event',
+    description: 'Cancels every active registration with it, in one transaction.',
+  })
+  @ApiSecurity(ORGANISER_KEY_SCHEME)
+  @ApiOkResponse({ type: EventResponseDto, description: 'The event, now CANCELLED.' })
+  @ApiProblemUnauthorized()
+  @ApiProblemNotFound()
+  @ApiProblemConflict('A draft has nothing to call off; already cancelled.')
   @Post(':id/cancel')
   @HttpCode(HttpStatus.OK)
   cancel(
@@ -105,6 +160,12 @@ export class EventsController {
     return this.events.cancel(id, organiser);
   }
 
+  @ApiOperation({ summary: 'Delete a draft event', description: 'Drafts only.' })
+  @ApiSecurity(ORGANISER_KEY_SCHEME)
+  @ApiNoContentResponse({ description: 'Deleted.' })
+  @ApiProblemUnauthorized()
+  @ApiProblemNotFound()
+  @ApiProblemConflict('Published and cancelled events are kept; cancel rather than delete.')
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
   remove(

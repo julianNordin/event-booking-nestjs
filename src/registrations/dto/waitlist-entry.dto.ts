@@ -1,3 +1,5 @@
+import { ApiProperty } from '@nestjs/swagger';
+
 export class WaitlistEntryDto {
   /**
    * Where this person stands right now: 1 is next in line.
@@ -6,6 +8,7 @@ export class WaitlistEntryDto {
    * computing it here is the one place that is both cheap and impossible to
    * get stale.
    */
+  @ApiProperty({ minimum: 1, example: 1 })
   place!: number;
 
   /**
@@ -16,9 +19,15 @@ export class WaitlistEntryDto {
    * expected: a ticket of 7 at place 2 simply means five people ahead have
    * since left.
    */
+  @ApiProperty({ minimum: 1, example: 7 })
   waitlistPosition!: number;
 
+  @ApiProperty({ format: 'uuid' })
   registrationId!: string;
+
+  @ApiProperty({ format: 'uuid' })
   attendeeId!: string;
+
+  @ApiProperty({ format: 'date-time' })
   registeredAt!: string;
 }

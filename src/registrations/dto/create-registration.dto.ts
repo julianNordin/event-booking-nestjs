@@ -1,3 +1,4 @@
+import { ApiProperty } from '@nestjs/swagger';
 import { IsUUID } from 'class-validator';
 
 export class CreateRegistrationDto {
@@ -8,6 +9,10 @@ export class CreateRegistrationDto {
    * side effect of registering them would make a typo in an email address into
    * a second account rather than a rejected request.
    */
+  @ApiProperty({
+    format: 'uuid',
+    description: 'An existing attendee. This endpoint identifies people, it does not create them.',
+  })
   @IsUUID('7', { message: 'attendeeId must be a version 7 uuid' })
   attendeeId!: string;
 }
