@@ -28,12 +28,31 @@ export class PrismaHealthIndicator {
       await this.prisma.$queryRaw`SELECT 1`;
       return check.up();
     } catch (error) {
-      // The reason is reported, but only the name of it. A connection error
+      // A short token, never the driver's own message: a connection error
       // carries a host, a port and sometimes a password, and /health is the
       // most reliably unauthenticated endpoint on any service.
-      return check.down({
-        reason: error instanceof Error ? error.name : 'unknown',
-      });
+      return check.down({ reason: reasonFor(error) });
     }
   }
+}
+
+/**
+ * The shortest safe description of why the ping failed.
+ *
+ * Prefers the driver's code, because one outage produces three different error
+ * shapes depending on what the pool happened to be doing: a connection torn
+ * down mid-flight is a bare `Error` with no code at all, the first query
+ * through a pool the database dropped carries `P2010`, and a fresh connect once
+ * the pool has drained carries `ECONNREFUSED`. All three were seen inside a
+ * single `docker compose stop db`. Going by `name` alone reported the literal
+ * word "Error" for one of them, which is worth nothing in an alert.
+ */
+function reasonFor(error: unknown): string {
+  if (!(error instanceof Error)) {
+    return 'unknown';
+  }
+
+  const { code } = error as { code?: unknown };
+
+  return typeof code === 'string' && code !== '' ? code : error.name;
 }

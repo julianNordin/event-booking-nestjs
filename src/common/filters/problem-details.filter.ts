@@ -18,6 +18,7 @@ const STATUS_TYPES: Record<number, { type: string; title: string }> = {
   415: { type: `${TYPE_PREFIX}:unsupported-media-type`, title: 'That media type is not supported' },
   429: { type: `${TYPE_PREFIX}:too-many-requests`, title: 'Too many requests' },
   500: { type: `${TYPE_PREFIX}:internal-error`, title: 'The server failed to handle the request' },
+  503: { type: `${TYPE_PREFIX}:service-unavailable`, title: 'A dependency is not answering' },
 };
 
 /**
@@ -54,7 +55,12 @@ export class ProblemDetailsFilter implements ExceptionFilter {
       problem[REQUEST_ID_KEY] = requestId;
     }
 
-    if (problem.status >= 500) {
+    // Only for a failure whose reason the response withholds. A domain error's
+    // detail *is* its message, so there is nothing left to record — and the one
+    // 5xx domain error, a dependency being down, is reported on a timer for as
+    // long as the outage lasts. Logging that as an "unhandled failure" with a
+    // stack, once per health poll, is untrue and buries the entries that matter.
+    if (problem.status >= 500 && !(exception instanceof DomainError)) {
       // The only place the original is recorded. It goes to the log, where an
       // operator can see it, and never into the response.
       this.logger.error(

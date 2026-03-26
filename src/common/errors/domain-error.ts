@@ -153,6 +153,42 @@ export class ResourceInUseError extends DomainError {
   }
 }
 
+/**
+ * Something this service depends on is not answering.
+ *
+ * The only error here that is not the caller's fault, and the only one whose
+ * occurrence is routine rather than exceptional: a health check reports it on a
+ * timer for as long as an outage lasts. It carries the per-check detail so the
+ * response says *which* dependency is down and what it reported, instead of
+ * leaving that in the logs where an orchestrator cannot reach it.
+ *
+ * What it carries is deliberately thin — a check name and a short reason token
+ * per check. /health is the most reliably unauthenticated route on any service,
+ * and a driver's own message names hosts, ports and occasionally credentials.
+ */
+export class DependencyUnavailableError extends DomainError {
+  readonly problemType = `${TYPE_PREFIX}:service-unavailable`;
+  readonly title = 'A dependency is not answering';
+  readonly status = 503;
+
+  constructor(
+    readonly failing: string[],
+    readonly checks: Record<string, unknown>,
+  ) {
+    super(
+      failing.length === 1
+        ? `${failing[0] ?? 'a dependency'} is not answering`
+        : `${failing.join(', ')} are not answering`,
+    );
+  }
+
+  override extensions(): Record<string, unknown> {
+    // `failing` is the one line an alert rule needs; `checks` is what someone
+    // reads once the alert has fired.
+    return { failing: this.failing, checks: this.checks };
+  }
+}
+
 /** A domain rule about the event itself was broken. */
 export class RuleViolationError extends DomainError {
   readonly problemType = `${TYPE_PREFIX}:rule-violation`;

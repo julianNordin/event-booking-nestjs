@@ -56,6 +56,35 @@ describe('PrismaHealthIndicator', () => {
     expect(result.database.reason).toBe('Error');
   });
 
+  it.each([
+    ['a severed pool', 'P2010'],
+    ['a refused connection', 'ECONNREFUSED'],
+  ])('names the failure by its driver code for %s', async (_scenario, code) => {
+    // Measured against a real outage: stopping the container mid-run makes
+    // Prisma throw a PrismaClientKnownRequestError carrying P2010, and a cold
+    // connect to a dead port carries ECONNREFUSED. Both are named `Error` if
+    // you go by `name`, which is what this reported before and is worth
+    // precisely nothing to whoever is reading the alert.
+    queryRaw.mockRejectedValue(
+      Object.assign(new Error(''), { name: 'PrismaClientKnownRequestError', code }),
+    );
+
+    const result = (await indicator.pingCheck('database')) as unknown as Result;
+
+    expect(result.database.reason).toBe(code);
+  });
+
+  it('falls back to the error name when the driver gives no code', async () => {
+    // The second and later polls of an outage arrive as a bare Error with no
+    // code at all. `Error` is a poor reason, but it is an honest one, and the
+    // alternative is putting the driver's message on an unauthenticated route.
+    queryRaw.mockRejectedValue(new Error('Connection terminated unexpectedly'));
+
+    const result = (await indicator.pingCheck('database')) as unknown as Result;
+
+    expect(result.database.reason).toBe('Error');
+  });
+
   it('uses the cheapest query there is', async () => {
     // A health check runs on a timer. One that costs real work becomes load of
     // its own, and the first thing to fall over under pressure.

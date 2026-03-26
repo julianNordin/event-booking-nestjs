@@ -9,7 +9,10 @@ import { buildOpenApiDocument, DOCS_JSON_PATH, DOCS_PATH } from '../../src/opena
 import { createTestApp } from '../support/app';
 
 interface Operation {
-  responses?: Record<string, { content?: Record<string, unknown>; description?: string }>;
+  responses?: Record<
+    string,
+    { content?: Record<string, unknown>; description?: string; schema?: unknown }
+  >;
   security?: unknown[];
   parameters?: { name: string; in: string }[];
   requestBody?: unknown;
@@ -88,18 +91,6 @@ describe('the OpenAPI document', () => {
       const offenders: string[] = [];
 
       for (const { route, method, operation } of operations()) {
-        // /health is excluded, and the exclusion is a known gap rather than a
-        // decision: @HealthCheck() declares its own 503 as application/json,
-        // and it wins over the declaration here whichever order the decorators
-        // are written in. At runtime the global filter turns Terminus's
-        // ServiceUnavailableException into problem+json like everything else,
-        // so the document and the wire currently disagree about this one
-        // response. Worth settling by checking what /health actually returns
-        // with the database stopped.
-        if (route === '/health') {
-          continue;
-        }
-
         for (const [status, response] of Object.entries(operation.responses ?? {})) {
           if (Number(status) < 400) {
             continue;
@@ -143,6 +134,46 @@ describe('the OpenAPI document', () => {
       }
 
       expect(missing).toEqual([]);
+    });
+  });
+
+  describe('the health operation', () => {
+    // Settled by measurement rather than by reading decorators: with the
+    // container stopped, /health answers 503 with a problem+json body, because
+    // the global filter converts Terminus's ServiceUnavailableException like
+    // any other. Terminus's own @HealthCheck() declared that response as
+    // application/json instead, and won whichever order the decorators were
+    // written in — @nestjs/swagger merges two declarations of one status into
+    // a single entry, and a `schema` beats a `content` block. So its
+    // documentation is turned off and both responses are declared here.
+    const health = (): Operation => document.paths['/health']?.get as Operation;
+
+    it('declares its 503 as problem+json, matching what the wire returns', () => {
+      const media = Object.keys(health().responses?.['503']?.content ?? {});
+
+      expect(media).toEqual(['application/problem+json']);
+    });
+
+    it('declares a 200 with the real health-check shape, not an empty object', () => {
+      const ok = health().responses?.['200'];
+      const schema = (ok?.content?.['application/json'] as { schema?: { $ref?: string } })?.schema;
+
+      expect(schema?.$ref).toBe('#/components/schemas/HealthResponseDto');
+    });
+
+    it('describes the health-check body with its real fields', () => {
+      const dto = document.components?.schemas?.HealthResponseDto as
+        { properties?: Record<string, unknown> } | undefined;
+
+      expect(Object.keys(dto?.properties ?? {})).toEqual(
+        expect.arrayContaining(['status', 'info', 'error', 'details']),
+      );
+    });
+
+    it('needs no API key', () => {
+      // An orchestrator cannot be handed an organiser's key, and the document
+      // is where a client finds that out before trying.
+      expect(health().security ?? []).toEqual([]);
     });
   });
 

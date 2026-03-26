@@ -1,6 +1,15 @@
 import type { Server } from 'node:http';
 
-import { Body, Controller, Get, INestApplication, NotFoundException, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  INestApplication,
+  Logger,
+  NotFoundException,
+  Post,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { Type } from 'class-transformer';
 import { IsInt, IsString, Min } from 'class-validator';
@@ -10,6 +19,7 @@ import { GLOBAL_PREFIX } from '../../config/app.config';
 import { configureApp } from '../../configure-app';
 import {
   AlreadyExistsError,
+  DependencyUnavailableError,
   ResourceInUseError,
   ResourceNotFoundError,
   RuleViolationError,
@@ -85,9 +95,21 @@ class ProbeController {
     throw checkViolation;
   }
 
+  @Get('dependency-down')
+  dependencyDown(): never {
+    throw new DependencyUnavailableError(['database'], {
+      database: { status: 'down', reason: 'P2010' },
+    });
+  }
+
   @Get('http-exception')
   httpException(): never {
     throw new NotFoundException('nothing here');
+  }
+
+  @Get('raw-unavailable')
+  rawUnavailable(): never {
+    throw new ServiceUnavailableException('the thing is not answering');
   }
 
   @Get('boom')
@@ -144,6 +166,7 @@ describe('ProblemDetailsFilter', () => {
       ['exists', 409],
       ['in-use', 409],
       ['rule', 409],
+      ['dependency-down', 503],
       ['http-exception', 404],
       ['boom', 500],
     ])('carries all five standard members for %s', async (path, status) => {
@@ -161,6 +184,7 @@ describe('ProblemDetailsFilter', () => {
       ['transition', 409],
       ['exists', 409],
       ['rule', 409],
+      ['dependency-down', 503],
       ['http-exception', 404],
       ['boom', 500],
     ])('uses a URN problem type for %s, never an https URL', async (path, status) => {
@@ -202,6 +226,67 @@ describe('ProblemDetailsFilter', () => {
 
       expect(problem.rule).toBe('capacity-covers-confirmed');
       expect(problem.confirmed).toBe(12);
+    });
+  });
+
+  describe('a dependency being down', () => {
+    it('answers 503 in the same shape as every other failure', async () => {
+      // /health is the one route in this API whose failure is routine rather
+      // than exceptional, and it was the one route whose body did not say what
+      // had gone wrong.
+      const problem = await get('dependency-down', 503);
+
+      expect(problem.type).toBe('urn:problem-type:event-booking:service-unavailable');
+      expect(problem.detail).toBe('database is not answering');
+    });
+
+    it('names which checks failed, and what each of them reported', async () => {
+      // Without this the body reads "Service Unavailable Exception" and an
+      // operator has to go to the logs to learn which dependency is down —
+      // which is the single fact the response exists to carry.
+      const problem = await get('dependency-down', 503);
+
+      expect(problem.failing).toEqual(['database']);
+      expect(problem.checks).toEqual({ database: { status: 'down', reason: 'P2010' } });
+    });
+
+    it('gives a bare ServiceUnavailableException a named type too', async () => {
+      // 503 was missing from the status table, so anything throwing Nest's own
+      // ServiceUnavailableException fell through to the unnamed catch-all.
+      const problem = await get('raw-unavailable', 503);
+
+      expect(problem.type).toBe('urn:problem-type:event-booking:service-unavailable');
+      expect(problem.title).not.toBe('The request failed');
+    });
+  });
+
+  describe('what reaches the log', () => {
+    it('records the original of a failure the client is not told about', async () => {
+      // The 500 body says "an unexpected condition" and nothing else, so the
+      // log is the only place the real error survives. Losing it there would
+      // leave nobody able to debug it.
+      const error = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+
+      await get('boom', 500);
+
+      expect(error).toHaveBeenCalled();
+      expect(String(error.mock.calls[0]?.[1])).toMatch(/ECONNREFUSED/);
+
+      error.mockRestore();
+    });
+
+    it('stays quiet about a 5xx the response already explains in full', async () => {
+      // A dependency being down is reported on a timer for as long as the
+      // outage lasts, and the response carries the whole reason. Logging it as
+      // an "unhandled failure" with a stack, once per poll, is both untrue and
+      // the fastest way to bury the entry that does matter.
+      const error = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+
+      await get('dependency-down', 503);
+
+      expect(error).not.toHaveBeenCalled();
+
+      error.mockRestore();
     });
   });
 
