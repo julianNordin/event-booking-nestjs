@@ -46,6 +46,10 @@ export const ApiProblemConflict = (
   description = 'The request conflicts with the current state.',
 ): MethodDecorator => problemResponse(409, description);
 
+export const ApiProblemServiceUnavailable = (
+  description = 'A dependency this service needs is not answering.',
+): MethodDecorator => problemResponse(503, description);
+
 export const ApiProblemTooManyRequests = (
   description = 'Rate limit exceeded for this endpoint.',
 ): MethodDecorator => problemResponse(429, description);

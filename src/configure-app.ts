@@ -20,7 +20,12 @@ import { setupOpenApi } from './openapi';
  * payloads the real service would reject.
  */
 export function configureApp(app: INestApplication): INestApplication {
-  app.setGlobalPrefix(GLOBAL_PREFIX);
+  app.setGlobalPrefix(GLOBAL_PREFIX, {
+    // /health reports on the process, not on the API. Versioning it alongside
+    // the routes would mean reconfiguring every orchestrator and uptime monitor
+    // each time the API version moves.
+    exclude: ['health'],
+  });
 
   app.useGlobalPipes(
     new ValidationPipe({

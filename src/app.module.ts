@@ -12,6 +12,7 @@ import { securityConfig, type SecurityConfig } from './config/security.config';
 import { ApiKeyGuard } from './common/guards/api-key.guard';
 import { validateEnv } from './config/env.validation';
 import { EventsModule } from './events/events.module';
+import { HealthModule } from './health/health.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { RegistrationsModule } from './registrations/registrations.module';
 
@@ -42,6 +43,7 @@ import { RegistrationsModule } from './registrations/registrations.module';
     EventsModule,
     AttendeesModule,
     RegistrationsModule,
+    HealthModule,
   ],
   controllers: [],
   providers: [
