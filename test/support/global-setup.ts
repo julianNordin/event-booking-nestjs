@@ -28,9 +28,12 @@ export default async function globalSetup(): Promise<void> {
   process.env.DATABASE_URL = databaseUrl;
 
   // The end-to-end tier boots the real AppModule, whose config validator
-  // demands these. Set here rather than in a .env so the suite is
-  // self-contained and cannot pick up a developer's real keys.
-  process.env.API_KEYS ??= 'stockholm-tech:sk_test_stockholm,malmo-events:sk_test_malmo';
+  // demands these. Assigned, never defaulted: the suite has to be self-contained,
+  // and a `??=` here would hand control of it to whatever the surrounding
+  // environment happens to set. CI sets its own API_KEYS, which under `??=` left
+  // the journey suites signing every request with a key the app had never heard
+  // of — 401 on CI, green on any machine with the variable unset.
+  process.env.API_KEYS = 'stockholm-tech:sk_test_stockholm,malmo-events:sk_test_malmo';
   process.env.NODE_ENV ??= 'test';
 
   // The throttler is still installed and still running in the end-to-end tier —
@@ -38,7 +41,7 @@ export default async function globalSetup(): Promise<void> {
   // of calls from one address in a few seconds, which is exactly the traffic
   // the production limit exists to refuse. The limit itself is proved in
   // src/common/guards/throttling.spec.ts, which sets a low one deliberately.
-  process.env.THROTTLE_LIMIT ??= '10000';
+  process.env.THROTTLE_LIMIT = '10000';
 
   // `migrate deploy`, never `db push`. Deploy replays the migration history
   // verbatim, which is the only way the partial index, the functional index and
