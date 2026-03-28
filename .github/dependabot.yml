@@ -1,0 +1,58 @@
+version: 2
+
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      # Matches this repository's convention: lowercase conventional, no scope.
+      prefix: chore
+    groups:
+      # One PR for the framework rather than eleven. They share a version line
+      # and are only ever upgraded together.
+      nestjs:
+        patterns: ['@nestjs/*']
+      types:
+        patterns: ['@types/*']
+
+    # Four majors are held back deliberately. Each was checked against the
+    # registry and each would break the build on the day it landed.
+    ignore:
+      # TypeScript 7 is the native Go compiler and ships no programmatic
+      # compiler API. `nest build` imports `typescript` and calls
+      # createProgram()/emit() with its own transformers, and so do ts-jest, the
+      # @nestjs/swagger CLI plugin and every type-aware lint rule. @nestjs/cli
+      # itself depends on typescript 5.
+      - dependency-name: typescript
+        update-types: ['version-update:semver-major']
+
+      # prisma@8 sits on the `latest` dist-tag as a release candidate while
+      # @prisma/client@latest is still 7. The CLI, the client and the adapter
+      # have to move as one; a lone major means a CLI a full version ahead of
+      # the client it generates for.
+      - dependency-name: prisma
+        update-types: ['version-update:semver-major']
+      - dependency-name: '@prisma/client'
+        update-types: ['version-update:semver-major']
+      - dependency-name: '@prisma/adapter-pg'
+        update-types: ['version-update:semver-major']
+
+      # 12.0.0 jumps straight from 3.1.0 and is "type": "module" with no
+      # CommonJS build at all. This application compiles to CommonJS and could
+      # not require() it — not a test-only problem, a runtime one.
+      - dependency-name: '@nestjs/event-emitter'
+        update-types: ['version-update:semver-major']
+
+      # 12.0.0 is ESM-only *and* peers on @nestjs/core ^12 while this is on
+      # Nest 11. Wrong twice over.
+      - dependency-name: '@nestjs/swagger'
+        update-types: ['version-update:semver-major']
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: chore
