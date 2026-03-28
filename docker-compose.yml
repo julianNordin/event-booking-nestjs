@@ -26,6 +26,31 @@ services:
       retries: 10
       start_period: 10s
 
+  # Behind a profile, so `docker compose up -d db` — what the README, the test
+  # harness and every migration step use — is unaffected by its existence.
+  # `docker compose --profile app up` runs the pair.
+  api:
+    profiles: ['app']
+    build:
+      context: .
+    image: event-booking-nestjs:local
+    restart: unless-stopped
+    environment:
+      # `db`, not localhost: the api resolves the service by name on the compose
+      # network, while everything running on the host uses the published port.
+      DATABASE_URL: postgresql://events:events@db:5432/events
+      # A local placeholder, and the reason the variable has no default in the
+      # validator: a service that starts without knowing who may write is
+      # fail-open by accident.
+      API_KEYS: local:sk_local_development_only
+    ports:
+      - '3000:3000'
+    depends_on:
+      db:
+        # The entrypoint runs `migrate deploy` before the process starts, and a
+        # migration against a database still initialising fails the container.
+        condition: service_healthy
+
 volumes:
   event-booking-db-data:
     name: event-booking-db-data
