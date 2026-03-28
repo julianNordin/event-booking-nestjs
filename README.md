@@ -340,7 +340,7 @@ service layer independently testable, and it is why the dependency-injection tes
 - [x] 15 — Guards, decorators, interceptors, throttling
 - [x] 16 — End-to-end tier
 - [x] 17 — OpenAPI, Swagger UI & health
-- [ ] 18 — Ship
+- [x] 18 — Ship
 
 ## Licence
 
