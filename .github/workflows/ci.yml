@@ -1,0 +1,80 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A second push to the same branch makes the first run irrelevant; finishing it
+# costs runner minutes and delays the one anybody is waiting on.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: lint, test and build
+    runs-on: ubuntu-latest
+
+    env:
+      # `npm ci` runs postinstall, which is `prisma generate`, which loads
+      # prisma.config.ts and reads DATABASE_URL. Nothing connects during
+      # generate — but the variable has to exist, and prisma.config.ts reads
+      # process.env directly rather than the `env()` helper that throws.
+      #
+      # The int tier does connect, and to a database Testcontainers starts on a
+      # port it chooses itself. Never to this one; no `services:` block is
+      # needed and adding one would be a second, unused postgres.
+      DATABASE_URL: postgresql://events:events@localhost:5432/events
+      # Required by the boot validator, with no default and no empty fallback,
+      # so every job that starts the application needs it set here.
+      API_KEYS: ci:sk_ci_placeholder_not_a_secret
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      # Separate from lint on purpose. Prettier is not part of the eslint run
+      # here, and a file with CRLF endings passes one and fails the other — on
+      # a fresh checkout of tracked files, only this step notices.
+      - name: Formatting
+        run: npm run format:check
+
+      - name: Types
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm run test:unit
+
+      # Testcontainers starts postgres:18-alpine itself. The ubuntu runner has a
+      # working Docker daemon, which is the only requirement.
+      - name: Integration tests
+        run: npm run test:int
+
+      - name: Build
+        run: npm run build
+
+  image:
+    name: docker image
+    runs-on: ubuntu-latest
+
+    # Independent of `verify` on purpose: a Dockerfile that no longer builds is
+    # worth knowing about in the same minute as a failing test, not after it.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the runtime image
+        run: docker build --tag event-booking-nestjs:${{ github.sha }} .
