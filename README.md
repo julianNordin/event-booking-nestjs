@@ -30,6 +30,32 @@ npm run start:dev
 
 Swagger UI at `/docs`, the raw spec at `/docs-json`, health at `/health`.
 
+## Configuration
+
+Every variable is validated at boot by `src/config/env.validation.ts`. A missing or malformed one
+stops the process with a message naming it, rather than surfacing an hour later as a 500 from
+whichever request first needed the value. Copy `.env.example` to `.env` to get started.
+
+| Variable            | Default       | Notes                                                        |
+| ------------------- | ------------- | ------------------------------------------------------------ |
+| `NODE_ENV`          | `development` | `development` \| `test` \| `production`                      |
+| `PORT`              | `3000`        |                                                              |
+| `DATABASE_URL`      | **required**  | Must be a `postgres://` or `postgresql://` connection string |
+| `DATABASE_POOL_MAX` | `10`          | Upper bound on the pg pool — see below                       |
+| `API_KEYS`          | **required**  | Comma-separated `name:key` pairs                             |
+| `THROTTLE_LIMIT`    | `10`          | Requests per window on the public write endpoints            |
+| `THROTTLE_TTL_MS`   | `60000`       | The window, in milliseconds                                  |
+
+Two of those have no default on purpose. `DATABASE_URL` is obvious. `API_KEYS` is the fail-closed
+choice made explicit: a service that starts without knowing who is allowed to create events either
+rejects everybody or accepts everybody, and it is always the second one.
+
+`DATABASE_POOL_MAX` is sized deliberately rather than left to a default, because the registration
+path holds an interactive transaction open across a row lock. A pool smaller than the offered
+concurrency turns a capacity rejection into a pool-exhaustion timeout, and the two are
+indistinguishable from outside — which is exactly how a concurrency test goes green for the wrong
+reason.
+
 ## Commands
 
 | Command                  | What it does                                                              |
@@ -46,6 +72,94 @@ The two test tiers are separate on purpose. Everything that is a claim about _ru
 the fast tier with no database at all; everything that is a claim about _SQL_ — constraints,
 isolation, locking — is settled in the slow tier against a real PostgreSQL, because those claims
 are not testable against a mock.
+
+## The API
+
+Everything below sits under `/api/v1`. Writing to an event needs an organiser key in an `x-api-key`
+header; browsing and registering do not, because the people registering are not the people who own
+the event.
+
+| Method   | Path                            | Key | What it does                                   |
+| -------- | ------------------------------- | :-: | ---------------------------------------------- |
+| `GET`    | `/events`                       |     | Paged, sorted, filtered, searchable            |
+| `POST`   | `/events`                       |  ✓  | 201 with a `Location` header                   |
+| `GET`    | `/events/{id}`                  |     |                                                |
+| `PATCH`  | `/events/{id}`                  |  ✓  | Capacity cannot drop below the confirmed count |
+| `POST`   | `/events/{id}/publish`          |  ✓  | `DRAFT` → `PUBLISHED`                          |
+| `POST`   | `/events/{id}/cancel`           |  ✓  | Cancels the event and every registration on it |
+| `DELETE` | `/events/{id}`                  |  ✓  | `DRAFT` only — 204                             |
+| `POST`   | `/events/{id}/registrations`    |     | Confirms, or waitlists with a position         |
+| `GET`    | `/events/{id}/registrations`    |  ✓  | The roster                                     |
+| `GET`    | `/events/{id}/waitlist`         |  ✓  | In position order                              |
+| `POST`   | `/attendees`                    |     | 409 on a duplicate email, case-insensitively   |
+| `GET`    | `/attendees/{id}`               |     |                                                |
+| `GET`    | `/attendees/{id}/registrations` |     |                                                |
+| `GET`    | `/registrations/{id}`           |     |                                                |
+| `POST`   | `/registrations/{id}/cancel`    |     | Promotes the next waitlisted attendee          |
+| `GET`    | `/health`                       |     | Outside `/api/v1` — it reports on the process  |
+
+### Errors
+
+Every failure is RFC 9457, served as `application/problem+json`, with a URN `type` rather than an
+invented https URL that would 404 forever:
+
+```json
+{
+  "type": "urn:problem-type:event-booking:already-exists",
+  "title": "That already exists",
+  "status": 409,
+  "detail": "this attendee already holds an active registration for this event",
+  "instance": "/api/v1/events/0195e3a0-.../registrations",
+  "conflictingOn": "eventId+attendeeId",
+  "requestId": "5bd9ae29-9824-4a22-8cc3-90504d24fc67"
+}
+```
+
+`detail` says what actually went wrong, never the word "Conflict" and never the driver's own
+message — a PostgreSQL `CHECK` violation embeds the entire failing row, every column value
+included. Extension members sit at the top level, which is what the RFC specifies. `requestId` is
+the same id the log line carries, so a caller can quote one string and have it found.
+
+Every one of these is declared in the OpenAPI document. An operation that leaves its error
+responses undeclared is documented as returning the _success_ schema for them, so a generated
+client expects an `Event` back from a 404; a spec test walks every operation and fails when one is
+missing.
+
+## In a container
+
+```bash
+docker compose --profile app up --build
+```
+
+The `api` service sits behind a profile, so `docker compose up -d db` — what the quick start, the
+migrations and the test harness all use — keeps meaning exactly what it did.
+
+The image is built in three stages: production dependencies, compile, and a runtime that carries
+neither a compiler nor the tests nor the source. It runs as `node` against a tree owned by root, so
+the process cannot rewrite the code it is executing, and its `HEALTHCHECK` calls the service's own
+`/health` — the container's idea of healthy is the load balancer's.
+
+`migrate deploy` runs on start, before the process. That replays the migration history verbatim,
+which is the only thing that reproduces the partial index, the functional index and the two `CHECK`
+constraints — they exist in the migration SQL and nowhere else. **`prisma db push` is banned in
+this repository** for exactly that reason: it reconciles the database to `schema.prisma` and would
+silently drop all four.
+
+Two details that are easy to get wrong and only fail at runtime:
+
+- The entrypoint is `sh -c "… && exec node dist/main"`. Without `exec` the shell stays PID 1,
+  SIGTERM is delivered to it rather than to node, `enableShutdownHooks()` never runs, and the
+  connection pool is killed rather than closed on every restart.
+- The runtime dependencies are installed **with** their install scripts. Skipping them looks free —
+  the project's own postinstall only regenerates a client the image does not read — but it also
+  skips `@prisma/engines`, and the CLI then tries to download the schema engine at container start,
+  as a non-root user, into a tree it cannot write to.
+
+The image is large: **792 MB**, of which roughly 250 MB is the Prisma CLI and its dependencies
+(`prisma studio`, `@electric-sql/pglite`, drivers for four databases this project does not use).
+That is the price of `migrate deploy` on start. Running migrations as a separate one-shot step and
+shipping only `@prisma/client` would cut it by about a third, and is the better answer for anything
+running more than one replica.
 
 ## Why a row lock
 
@@ -177,6 +291,35 @@ its total, then two more per event. Measured with the Prisma client extension in
 The test asserts that five events and ten cost the **same** number of queries, rather than asserting
 a particular number. A magic number goes stale the first time somebody adds a legitimate query, and
 it says nothing about whether the cost grows with the data — which is the only property that matters.
+
+## Layout
+
+```
+src/
+  config/           env schema validated at boot, typed namespaced config
+  prisma/           PrismaService on the pg driver adapter, query counter
+  common/
+    filters/        the RFC 9457 filter and the Prisma error mapper
+    guards/         the API key guard, registered globally and fail-closed
+    decorators/     @Public(), @Organiser(), the problem-response declarations
+    clock/          injectable "now", so time is a provider and not new Date()
+  events/           controller, service, dto/, and the status state machine
+  attendees/
+  registrations/
+    policy/         the rules. No @nestjs/*, no Prisma, no clock, no I/O.
+  health/
+prisma/             schema.prisma, migrations/, seed.ts
+test/
+  db/               Prisma queries and the four constraints, against real postgres
+  integration/      supertest journeys through the app main.ts builds
+  support/          container setup, truncation, factories
+```
+
+`registrations/policy/` is framework-free on purpose: it holds the rules, and therefore most of the
+coverage, at zero bootstrap cost. Controllers never touch `PrismaService` and services never hand a
+Prisma model back to a controller — a mapper produces the response DTO. That is what makes the
+service layer independently testable, and it is why the dependency-injection tests can replace
+`PrismaService` with a mock and still be testing something real.
 
 ## Roadmap
 
