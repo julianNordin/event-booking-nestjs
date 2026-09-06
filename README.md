@@ -1,5 +1,7 @@
 # event-booking-nestjs
 
+[![CI](https://github.com/julianNordin/event-booking-nestjs/actions/workflows/ci.yml/badge.svg)](https://github.com/julianNordin/event-booking-nestjs/actions/workflows/ci.yml)
+
 A NestJS + Prisma + PostgreSQL API for events, attendees and registrations, built around one
 problem that a CRUD demo cannot show: **two people racing for the last seat**.
 
